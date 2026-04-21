@@ -7,7 +7,7 @@
 
 # Agent Session Protocol
 
-The Agent Session Protocol is a portable JSONL format for agenting coding sessions.
+The Agent Session Protocol is a portable JSONL format for agentic coding sessions.
 It comes with a reference CLI tool (`capi`) for sharing, importing, and tracking sessions across machines and agents.
 
 Sessions can be shared from any agent and resumed by any agent, on any machine.
