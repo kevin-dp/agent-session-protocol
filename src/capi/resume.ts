@@ -10,14 +10,14 @@ import {
   denormalize,
   writeClaudeSession,
   writeCodexSession,
-} from "agent-session-protocol"
+} from "../index.js"
 import { getAuthHeaders, readConfig } from "./config.js"
 import { getGitUser, readSessionFile, writeSessionFile } from "./tracked-sessions.js"
 import { sanitizeJsonLine } from "./sanitize.js"
 import type {
   AgentType,
   NormalizedEvent,
-} from "agent-session-protocol"
+} from "../index.js"
 import type { SessionFile } from "./tracked-sessions.js"
 
 interface ResumeOptions {

@@ -21,15 +21,15 @@ import {
   rewriteNativeLines,
   writeClaudeSession,
   writeCodexSession,
-} from "agent-session-protocol"
-import { SkillInvocationFilter } from "agent-session-protocol"
-import { denormalize, normalize } from "agent-session-protocol"
+} from "../index.js"
+import { SkillInvocationFilter } from "../index.js"
+import { denormalize, normalize } from "../index.js"
 import type { HeadersRecord } from "@durable-streams/client"
 import type {
   AgentType,
   DiscoveredSession,
   NormalizedEvent,
-} from "agent-session-protocol"
+} from "../index.js"
 
 // Tracked-session (git-integrated) support — ported from the old `sesh`
 // CLI. These live behind their own subcommands (init / checkin / push /
@@ -819,8 +819,10 @@ function installSkills(args: Record<string, string | boolean>): void {
  * doesn't do anything risky by default.
  */
 function installChannel(): void {
+  // This file compiles to dist/capi/cli.js, so the bin dir sits two
+  // levels up (../../bin/). The skill-installer uses the same dance.
   const queueBinPath = fileURLToPath(
-    new URL(`../bin/capi-queue-channel.mjs`, import.meta.url)
+    new URL(`../../bin/capi-queue-channel.mjs`, import.meta.url)
   )
 
   if (!existsSync(queueBinPath)) {

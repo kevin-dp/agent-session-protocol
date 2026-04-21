@@ -142,11 +142,11 @@ async function main() {
   )
 
   try {
-    const { writeConfig } = await import(`../src/config.js`)
+    const { writeConfig } = await import(`../../src/capi/config.js`)
     const { writeSessionFile, listSessionFiles } = await import(
-      `../src/tracked-sessions.js`
+      `../../src/capi/tracked-sessions.js`
     )
-    const { merge } = await import(`../src/merge.js`)
+    const { merge } = await import(`../../src/capi/merge.js`)
 
     // Init capi (no DS server needed for merge — it's all local)
     writeConfig(repo, { server: `http://localhost:4437`, version: 1 })

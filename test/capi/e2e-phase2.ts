@@ -96,12 +96,12 @@ async function main() {
   console.log(`  Server at ${baseUrl}`)
 
   try {
-    const { writeConfig } = await import(`../src/config.js`)
+    const { writeConfig } = await import(`../../src/capi/config.js`)
     const { writeSessionFile, readSessionFile } = await import(
-      `../src/tracked-sessions.js`
+      `../../src/capi/tracked-sessions.js`
     )
-    const { pushAll } = await import(`../src/push.js`)
-    const { resume } = await import(`../src/resume.js`)
+    const { pushAll } = await import(`../../src/capi/push.js`)
+    const { resume } = await import(`../../src/capi/resume.js`)
 
     // Initialize capi
     writeConfig(repo, { server: baseUrl, version: 1 })

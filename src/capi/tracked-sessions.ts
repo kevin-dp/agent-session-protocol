@@ -7,7 +7,7 @@ import * as path from "node:path"
 import * as os from "node:os"
 import { execSync } from "node:child_process"
 import { getCapiDir } from "./config.js"
-import type { AgentType } from "agent-session-protocol"
+import type { AgentType } from "../index.js"
 
 export interface SessionFile {
   sessionId: string

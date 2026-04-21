@@ -8,7 +8,7 @@ import { DurableStream } from "@durable-streams/client"
 import {
   findSessionPath,
   normalize,
-} from "agent-session-protocol"
+} from "../index.js"
 import {
   getAuthHeaders,
   readConfig,

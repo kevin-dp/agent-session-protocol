@@ -1,3 +1,4 @@
+import { mkdirSync, writeFileSync } from "node:fs"
 import { readdir, readFile, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { homedir } from "node:os"
@@ -225,7 +226,7 @@ export function writeClaudeSession(
   cwd: string,
   lines: Array<string>
 ): string {
-  const { writeFileSync, mkdirSync } = require(`node:fs`) as typeof import("node:fs")
+  
   const sanitizedCwd = cwd.replace(/\//g, `-`)
   const projectDir = join(homedir(), `.claude`, `projects`, sanitizedCwd)
   mkdirSync(projectDir, { recursive: true })
@@ -238,7 +239,7 @@ export function writeCodexSession(
   sessionId: string,
   lines: Array<string>
 ): string {
-  const { writeFileSync, mkdirSync } = require(`node:fs`) as typeof import("node:fs")
+  
   const now = new Date()
   const datePath = [
     now.getFullYear(),

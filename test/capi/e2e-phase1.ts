@@ -129,11 +129,11 @@ async function main() {
 
   try {
     // Import modules
-    const { writeConfig, readConfig } = await import(`../src/config.js`)
+    const { writeConfig, readConfig } = await import(`../../src/capi/config.js`)
     const { writeSessionFile, readSessionFile, listSessionFiles } =
-      await import(`../src/tracked-sessions.js`)
-    const { pushAll } = await import(`../src/push.js`)
-    const { resume } = await import(`../src/resume.js`)
+      await import(`../../src/capi/tracked-sessions.js`)
+    const { pushAll } = await import(`../../src/capi/push.js`)
+    const { resume } = await import(`../../src/capi/resume.js`)
 
     // === Test init ===
     console.log(`\n=== Test: init ===`)
