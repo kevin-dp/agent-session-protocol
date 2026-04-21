@@ -1,0 +1,7 @@
+linkWorkspacePackages: true
+preferWorkspacePackages: true
+
+packages:
+  - packages/*
+  - examples/*
+  - examples/**/*

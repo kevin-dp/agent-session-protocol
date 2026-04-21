@@ -1,0 +1,45 @@
+# Wrangler config template. The actual `wrangler.toml` is generated from
+# this file by `scripts/generate-wrangler.mjs` on every `pnpm dev` /
+# `pnpm deploy` (via the `predev` / `predeploy` hooks).
+#
+# Placeholders — set these as env vars before building:
+#   VIEWER_KV_NAMESPACE_ID   CF KV namespace ID for the short-URL store.
+#                            Create once with: `wrangler kv namespace create SHORTENER_KV`
+#                            and set the printed ID as this env var.
+#   VIEWER_DOMAIN            Optional custom domain (e.g. share.example.com).
+#                            If unset, the [[routes]] block is stripped and the
+#                            worker deploys to the default <name>.<subdomain>.workers.dev.
+
+name = "viewer"
+main = "src/worker.ts"
+compatibility_date = "2025-01-09"
+
+[[kv_namespaces]]
+binding = "SHORTENER_KV"
+id = "${VIEWER_KV_NAMESPACE_ID}"
+
+[[routes]]
+pattern = "${VIEWER_DOMAIN}"
+custom_domain = true
+
+[vars]
+# Comma-separated list of allowed DS hosts. Only URLs with these hosts can
+# be registered as short URLs.
+ALLOWED_DS_HOSTS = "api.electric-sql.cloud"
+
+# Default TTL for short URL entries (seconds). Set to 0 for no expiration.
+DEFAULT_TTL_SECONDS = "2592000"  # 30 days
+
+# Bundle the SPA viewer as static assets served by the worker.
+# Run `pnpm --filter viewer-spa build` first (invoked automatically via
+# predev / predeploy).
+#
+# Note: we deliberately do NOT set `not_found_handling = "single-page-application"`.
+# With that setting, the assets binding intercepts all non-asset paths and serves
+# index.html directly — bypassing the worker entirely. We want the worker to
+# handle routing for short URLs (/:shortId), so we leave it as default ("none"):
+# the worker is invoked for any path that doesn't match a bundled asset, and
+# decides for itself when to serve the SPA via env.ASSETS.fetch(/index.html).
+[assets]
+directory = "./spa/dist"
+binding = "ASSETS"

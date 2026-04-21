@@ -1,0 +1,21 @@
+{
+  "name": "viewer",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Cloudflare Worker that serves the browser viewer for shared agent sessions (SPA + short-URL API).",
+  "type": "module",
+  "scripts": {
+    "config:generate": "node scripts/generate-wrangler.mjs",
+    "build:spa": "pnpm --filter viewer-spa build",
+    "predev": "pnpm config:generate && pnpm build:spa",
+    "predeploy": "pnpm config:generate && pnpm build:spa",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "typescript": "~5.9.3",
+    "wrangler": "^3.100.0"
+  }
+}
