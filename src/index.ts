@@ -1,48 +1,13 @@
-import { normalizeClaude } from "./normalize/claude.js"
-import { normalizeCodex } from "./normalize/codex.js"
-import { denormalizeClaude } from "./denormalize/claude.js"
-import { denormalizeCodex } from "./denormalize/codex.js"
-import type {
-  AgentType,
-  DenormalizeOptions,
-  NormalizeOptions,
-  NormalizedEvent,
-} from "./types.js"
-
-export function normalize(
-  lines: Array<string>,
-  agent: AgentType,
-  options: NormalizeOptions = {}
-): Array<NormalizedEvent> {
-  switch (agent) {
-    case `claude`:
-      return normalizeClaude(lines, options)
-    case `codex`:
-      return normalizeCodex(lines, options)
-    default:
-      throw new Error(`Unsupported agent: ${agent as string}`)
-  }
-}
-
-export function denormalize(
-  events: Array<NormalizedEvent>,
-  agent: AgentType,
-  options: DenormalizeOptions = {}
-): Array<string> {
-  switch (agent) {
-    case `claude`:
-      return denormalizeClaude(events, options)
-    case `codex`:
-      return denormalizeCodex(events, options)
-    default:
-      throw new Error(`Unsupported agent: ${agent as string}`)
-  }
-}
+export { normalize } from "./normalize.js"
+export { denormalize } from "./denormalize.js"
 
 export {
   discoverSessions,
   findClaudeSession,
   findSessionPath,
+  getClaudeFirstUserPrompt,
+  registerClaudeHistoryEntry,
+  resolveSession,
   rewriteNativeLines,
   writeClaudeSession,
   writeCodexSession,
@@ -52,6 +17,17 @@ export {
   filterSkillInvocations,
   SkillInvocationFilter,
 } from "./filter-skill-invocations.js"
+export type { SkillInvocationFilterState } from "./filter-skill-invocations.js"
+
+export { loadSession, serializeCursor, deserializeCursor } from "./load.js"
+export { tailSession } from "./tail.js"
+export { syncSession } from "./sync.js"
+export { importSession } from "./import.js"
+export { importLocalSession } from "./import-local.js"
+export type {
+  ImportLocalOptions,
+  ImportLocalResult,
+} from "./import-local.js"
 
 export type {
   AgentType,
@@ -74,3 +50,22 @@ export type {
 } from "./types.js"
 
 export type { DiscoveredSession } from "./sessions.js"
+
+export type {
+  LoadOptions,
+  LoadResult,
+  LoadUpdate,
+  SerializedSessionCursor,
+  SessionCursor,
+} from "./load.js"
+export type { TailOptions, TailResult } from "./tail.js"
+export type {
+  SyncOptions,
+  SyncProgressEvent,
+  SyncResult,
+} from "./sync.js"
+export type {
+  ImportOptions,
+  ImportProgressEvent,
+  ImportResult,
+} from "./import.js"

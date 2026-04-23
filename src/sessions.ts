@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from "node:fs"
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs"
 import { readdir, readFile, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { homedir } from "node:os"
@@ -194,6 +194,39 @@ async function findClaudeJsonlById(
   return null
 }
 
+/**
+ * Resolve a session to its filesystem entry. Preference order:
+ *   1. Exact sessionId match among discovered sessions.
+ *   2. If no sessionId given → active session, else most-recent.
+ *   3. Fallback for Claude: scan JSONL files directly (older/continued sessions).
+ *
+ * Throws if no session can be located.
+ */
+export async function resolveSession(
+  sessionId?: string,
+  agent?: AgentType
+): Promise<DiscoveredSession> {
+  const sessions = await discoverSessions(agent)
+  let session = sessionId
+    ? sessions.find((s) => s.sessionId === sessionId)
+    : (sessions.find((s) => s.active) ?? sessions[sessions.length - 1])
+
+  if (!session && sessionId && (!agent || agent === `claude`)) {
+    session = (await findClaudeSession(sessionId)) ?? undefined
+  }
+
+  if (!session) {
+    const available = sessions.length
+      ? `Available: ${sessions.map((s) => `${s.agent}/${s.sessionId}`).join(`, `)}`
+      : `No local sessions discovered.`
+    throw new Error(
+      `Session not found${sessionId ? `: ${sessionId}` : ``}. ${available}`
+    )
+  }
+
+  return session
+}
+
 export async function findClaudeSession(
   sessionId: string
 ): Promise<DiscoveredSession | null> {
@@ -219,6 +252,71 @@ export async function findClaudeSession(
     cwd: `/${cwd}`,
     active: false,
   }
+}
+
+/**
+ * Register a Claude session in `~/.claude/history.jsonl`, which is the
+ * index `claude --resume <id>` consults to find a session's project
+ * directory. Without an entry here Claude reports "No conversation found
+ * with session ID" even when the `<id>.jsonl` file is on disk.
+ *
+ * `display` becomes the label Claude shows for the session in its
+ * interactive resume picker — pass the imported session's first user
+ * prompt when available, or a placeholder like "Imported session".
+ */
+export function registerClaudeHistoryEntry(
+  sessionId: string,
+  cwd: string,
+  display: string
+): void {
+  const entry = {
+    display,
+    pastedContents: {},
+    timestamp: Date.now(),
+    project: cwd,
+    sessionId,
+  }
+  const historyPath = join(homedir(), `.claude`, `history.jsonl`)
+  appendFileSync(historyPath, JSON.stringify(entry) + `\n`)
+}
+
+/**
+ * Extract the first user prompt from a Claude-native JSONL session.
+ * Returns `null` if none is found (e.g. session with only assistant
+ * messages, or malformed input). Content is normalized to a single
+ * string — text-block arrays are joined by newlines.
+ */
+export function getClaudeFirstUserPrompt(
+  lines: Array<string>
+): string | null {
+  for (const line of lines) {
+    try {
+      const obj = JSON.parse(line) as Record<string, unknown>
+      if (obj.type !== `user`) continue
+      // Skip synthetic continuation markers that Claude injects on resume.
+      if (obj.isMeta === true) continue
+      const message = obj.message as Record<string, unknown> | undefined
+      const content = message?.content
+      if (typeof content === `string`) return content
+      if (Array.isArray(content)) {
+        const texts: Array<string> = []
+        for (const block of content) {
+          if (
+            typeof block === `object` &&
+            block !== null &&
+            (block as { type?: string }).type === `text` &&
+            typeof (block as { text?: string }).text === `string`
+          ) {
+            texts.push((block as { text: string }).text)
+          }
+        }
+        if (texts.length > 0) return texts.join(`\n`)
+      }
+    } catch {
+      continue
+    }
+  }
+  return null
 }
 
 export function writeClaudeSession(

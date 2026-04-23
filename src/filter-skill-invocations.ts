@@ -35,10 +35,29 @@ import type { AgentType } from "./types.js"
  */
 const SHARE_SKILL_NAMES = new Set([`share`])
 
+/**
+ * Plain-object snapshot of a `SkillInvocationFilter`'s internal state,
+ * sufficient to fully reconstruct the filter. Safe to JSON-serialize and
+ * persist across process restarts.
+ */
+export interface SkillInvocationFilterState {
+  inSkillRound: boolean
+}
+
 export class SkillInvocationFilter {
   private inSkillRound = false
 
   constructor(private readonly agent: AgentType) {}
+
+  /** Snapshot the filter's state for serialization. */
+  getState(): SkillInvocationFilterState {
+    return { inSkillRound: this.inSkillRound }
+  }
+
+  /** Restore state produced by `getState()`. */
+  setState(state: SkillInvocationFilterState): void {
+    this.inSkillRound = state.inSkillRound
+  }
 
   feed(lines: Array<string>): Array<string> {
     const out: Array<string> = []

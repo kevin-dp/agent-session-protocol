@@ -1,12 +1,12 @@
 import {
-  createReadStream,
+  appendFileSync,
+  chmodSync,
   existsSync,
   mkdirSync,
   readFileSync,
-  statSync,
+  realpathSync,
   symlinkSync,
   unlinkSync,
-  watch,
   writeFileSync,
 } from "node:fs"
 import { randomUUID } from "node:crypto"
@@ -14,21 +14,16 @@ import { execSync } from "node:child_process"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { DurableStream, FetchError } from "@durable-streams/client"
 import {
   discoverSessions,
-  findClaudeSession,
-  rewriteNativeLines,
-  writeClaudeSession,
-  writeCodexSession,
+  importSession as libImportSession,
+  syncSession,
 } from "../index.js"
-import { SkillInvocationFilter } from "../index.js"
-import { denormalize, normalize } from "../index.js"
-import type { HeadersRecord } from "@durable-streams/client"
 import type {
   AgentType,
   DiscoveredSession,
-  NormalizedEvent,
+  ImportProgressEvent,
+  SyncProgressEvent,
 } from "../index.js"
 
 // Tracked-session (git-integrated) support — ported from the old `sesh`
@@ -51,11 +46,6 @@ import {
 import { pushAll } from "./push.js"
 import { resume as resumeTracked } from "./resume.js"
 import { merge as mergeTracked } from "./merge.js"
-import * as fs from "node:fs"
-import * as os from "node:os"
-import * as path from "node:path"
-
-let globalHeaders: HeadersRecord = {}
 
 function parseArgs(argv: Array<string>): {
   command: string
@@ -90,491 +80,81 @@ function detectAgent(): AgentType | null {
   return null
 }
 
-async function createOrConnectStream(
-  url: string,
-  contentType: string
-): Promise<DurableStream> {
-  try {
-    return await DurableStream.create({
-      url,
-      contentType,
-      headers: globalHeaders,
-    })
-  } catch (error) {
-    if (error instanceof FetchError && error.status === 409) {
-      return new DurableStream({
-        url,
-        contentType,
-        headers: globalHeaders,
-      })
-    }
-    throw error
-  }
+/**
+ * Session ID of the agent we're running *inside*, if any. Claude Code
+ * sets `CLAUDE_CODE_SESSION_ID` on the environment of every subprocess
+ * it spawns — including skill execution and tool invocations — so we
+ * can pin `/share` (and similar) to the calling session even when
+ * multiple Claude processes are active on the same machine. Without
+ * this, `resolveSession` falls back to `find(active) ?? mostRecent`,
+ * which picks whatever CC happens to appear first in readdir order.
+ */
+function detectCallingSessionId(): string | undefined {
+  return process.env.CLAUDE_CODE_SESSION_ID
 }
 
-async function getStreamItemCount(url: string): Promise<number> {
-  try {
-    const resolvedHeaders: Record<string, string> = {}
-    for (const [key, value] of Object.entries(globalHeaders)) {
-      if (typeof value === `string`) {
-        resolvedHeaders[key] = value
-      } else if (typeof value === `function`) {
-        resolvedHeaders[key] = await (value as () => Promise<string>)()
-      }
-    }
-
-    const response = await fetch(url, {
-      method: `HEAD`,
-      headers: resolvedHeaders,
-    })
-    if (!response.ok) return 0
-    const totalSize = response.headers.get(`stream-total-size`)
-    return totalSize ? parseInt(totalSize, 10) : 0
-  } catch {
-    return 0
-  }
-}
-
-async function pushLines(
-  streamUrl: string,
-  _producerId: string,
-  lines: Array<string>
-): Promise<number> {
-  // Delta logic: only push new lines that don't already exist in the stream.
-  // Previously this was important because each share reused the same stream URL
-  // (based on session ID), so re-exporting needed to avoid duplicates.
-  // Now each share gets a unique URL ({sessionId}/{entryCount}-{uuid}), so the
-  // stream is always empty on first push and this check is effectively a no-op.
-  // Kept as defensive behavior in case someone calls pushLines() with an
-  // already-populated stream URL.
-  const existingCount = await getStreamItemCount(streamUrl)
-  if (existingCount >= lines.length) {
-    return 0 // already up to date
-  }
-
-  const newLines = lines.slice(existingCount)
-  if (newLines.length === 0) return 0
-
-  // Use auto-batching: fire-and-forget appends, then await all promises.
-  // The DS client batches concurrent appends into single HTTP requests
-  // automatically (wraps JSON items in arrays, server flattens them).
-  const stream = await createOrConnectStream(streamUrl, `application/json`)
-  const promises = newLines.map((line) => stream.append(line))
-  await Promise.all(promises)
-
-  return newLines.length
-}
-
-async function streamExists(url: string): Promise<boolean> {
-  try {
-    const stream = new DurableStream({
-      url,
-      contentType: `application/json`,
-      headers: globalHeaders,
-    })
-    const response = await stream.stream({ json: true, live: false })
-    const items = await response.json()
-    return items.length > 0
-  } catch {
-    return false
-  }
-}
-
-async function readStream<T>(url: string): Promise<Array<T>> {
-  const stream = new DurableStream({
-    url,
-    contentType: `application/json`,
-    headers: globalHeaders,
-  })
-  const response = await stream.stream<T>({ json: true, live: false })
-  return response.json()
-}
-
-function extractSessionMeta(
-  lines: Array<string>,
-  agent: AgentType
-): { sessionId: string; cwd: string } {
-  for (const line of lines) {
-    try {
-      const obj = JSON.parse(line) as Record<string, unknown>
-
-      if (agent === `claude`) {
-        if (obj.sessionId && obj.cwd) {
-          return {
-            sessionId: String(obj.sessionId),
-            cwd: String(obj.cwd),
-          }
-        }
-      }
-
-      if (agent === `codex` && obj.type === `session_meta`) {
-        const payload = obj.payload as Record<string, unknown>
-        return {
-          sessionId: String(payload.id ?? ``),
-          cwd: String(payload.cwd ?? ``),
-        }
-      }
-    } catch {
-      continue
-    }
-  }
-
-  return { sessionId: ``, cwd: `` }
-}
-
-async function exportSession(
-  args: Record<string, string | boolean>,
-  positional: Array<string>
-): Promise<void> {
-  const server =
-    (args.server as string | undefined) ??
-    positional[0] ??
-    process.env.CAPI_SERVER
-  if (!server) {
-    console.error(
-      `Usage: capi export --server <url> [--agent claude|codex] [--session <id>]`
-    )
-    console.error(`  Or set the CAPI_SERVER environment variable.`)
-    process.exit(1)
-  }
-
-  let agent: AgentType | undefined =
-    (args.agent as AgentType | undefined) ?? detectAgent() ?? undefined
-  const sessionId = args.session as string | undefined
-
-  const sessions = await discoverSessions(agent)
-
-  let session = sessionId
-    ? sessions.find((s) => s.sessionId === sessionId)
-    : (sessions.find((s) => s.active) ?? sessions[sessions.length - 1])
-
-  // Fallback: search for JSONL file directly when session ID is provided
-  // but not found via metadata (e.g., older or continued sessions)
-  if (!session && sessionId && (!agent || agent === `claude`)) {
-    session = (await findClaudeSession(sessionId)) ?? undefined
-  }
-
-  if (!session) {
-    console.error(`Session not found: ${sessionId ?? `(none)`}`)
-    if (sessions.length > 0) {
-      console.error(`Available sessions:`)
-      for (const s of sessions) {
-        console.error(
-          `  ${s.agent} ${s.sessionId} ${s.active ? `(active)` : ``} ${s.cwd ?? ``}`
-        )
-      }
-    }
-    process.exit(1)
-  }
-
-  agent = session.agent
-  const live = args.live === true
-
-  console.error(
-    `Exporting ${agent} session ${live ? `(live)` : `(snapshot)`}: ${session.sessionId}`
-  )
-  console.error(`  Path: ${session.path}`)
-
-  const content = readFileSync(session.path, `utf8`)
-  const unfilteredLines = content.split(`\n`).filter((l) => l.trim())
-  // Strip out /share skill-invocation rounds so resumed sessions don't
-  // show the share plumbing at the tail. Filter is stateful so that
-  // skill-execution machinery spanning the initial snapshot and later
-  // incremental live-watcher batches is handled as one contiguous round.
-  const skillFilter = new SkillInvocationFilter(agent)
-  const rawLines = skillFilter.feed(unfilteredLines)
-  const events = normalize(rawLines, agent)
-
-  // URL pattern:
-  //  - snapshot: /asp/{sessionId}/{entryCount}-{uuid}      (unique per share)
-  //  - live:     /asp/{sessionId}/live                     (one per session)
-  const shareId = live ? `live` : `${events.length}-${randomUUID()}`
-  const baseUrl = `${server.replace(/\/$/, ``)}/asp/${session.sessionId}/${shareId}`
-  const nativeUrl = `${baseUrl}/native/${agent}`
-
-  const normalizedLines = events.map((e) => JSON.stringify(e))
-
-  if (!live) {
-    console.error(`  Share ID: ${shareId}`)
-  }
-  console.error(`  Normalized: ${events.length} events`)
-  const newNormalized = await pushLines(
-    baseUrl,
-    `asp-normalized-${session.sessionId}-${shareId}`,
-    normalizedLines
-  )
-  console.error(
-    newNormalized > 0
-      ? `  Pushed ${newNormalized} normalized events`
-      : `  Normalized stream up to date`
-  )
-
-  const newNative = await pushLines(
-    nativeUrl,
-    `asp-native-${session.sessionId}-${shareId}`,
-    rawLines
-  )
-  console.error(
-    newNative > 0
-      ? `  Pushed ${newNative} native ${agent} lines`
-      : `  Native ${agent} stream up to date`
-  )
-
-  // Optionally shorten the URL via a shortener service
-  const shortener =
-    (args.shortener as string | undefined) ?? process.env.CAPI_SHORTENER
-  const token =
+function resolveToken(
+  args: Record<string, string | boolean>
+): string | undefined {
+  return (
     (args.token as string | undefined) ??
     process.env.CAPI_TOKEN ??
     process.env.DS_TOKEN
-
-  let outputUrl = baseUrl
-  if (shortener) {
-    const shortUrl = await createShortUrl(shortener, {
-      fullUrl: baseUrl,
-      sessionId: session.sessionId,
-      entryCount: events.length,
-      agent,
-      token: token ?? ``,
-      live,
-    })
-    if (shortUrl) {
-      console.error(`  Short URL: ${shortUrl}`)
-      outputUrl = shortUrl
-    } else {
-      console.error(`  Shortener failed, using full URL`)
-    }
-  }
-
-  if (!live) {
-    console.log(outputUrl)
-    return
-  }
-
-  // Live mode: print the URL now, then watch the source file forever
-  console.log(outputUrl)
-  console.error(``)
-  console.error(`Watching ${session.path}`)
-  console.error(`Press Ctrl-C to stop sharing.`)
-
-  // Create the prompt queue stream now so viewers can POST to it. Without
-  // this the first POST from the viewer would 404.
-  const queueUrl = `${baseUrl}/prompts`
-  try {
-    await createOrConnectStream(queueUrl, `application/json`)
-    console.error(`  Queue stream ready: ${queueUrl}`)
-  } catch (error) {
-    console.error(
-      `  Failed to create queue stream (collab disabled):`,
-      error instanceof Error ? error.message : error
-    )
-  }
-
-  // Publish the collab config file so the queue-channel MCP subprocess
-  // (already running under CC if the user started claude with
-  // --dangerously-load-development-channels server:queue) can pick up
-  // the session's queue URL and start forwarding prompts.
-  const collabPath = writeCollabConfig({
-    sessionId: session.sessionId,
-    dsBase: server,
-    queueUrl,
-    token,
-  })
-  console.error(`  Collab config: ${collabPath}`)
-
-  try {
-    await watchAndPushLive({
-      sourcePath: session.path,
-      nativeUrl,
-      normalizedUrl: baseUrl,
-      agent,
-      skillFilter,
-    })
-  } finally {
-    removeCollabConfig()
-  }
-}
-
-interface WatchOptions {
-  sourcePath: string
-  nativeUrl: string
-  normalizedUrl: string
-  agent: AgentType
-  // Shared across the initial export and the watcher so a skill round
-  // that spans the boundary (invocation in the snapshot, machinery in
-  // later batches) is stripped as a single contiguous round.
-  skillFilter: SkillInvocationFilter
-}
-
-/**
- * Read bytes [start, end) from the source file.
- */
-function readByteRange(
-  path: string,
-  start: number,
-  end: number
-): Promise<string> {
-  return new Promise((resolve, reject) => {
-    if (end <= start) {
-      resolve(``)
-      return
-    }
-    const chunks: Array<Buffer> = []
-    const stream = createReadStream(path, {
-      start,
-      end: end - 1, // createReadStream end is inclusive
-      encoding: `utf8`,
-    })
-    stream.on(`data`, (chunk) => {
-      chunks.push(typeof chunk === `string` ? Buffer.from(chunk) : chunk)
-    })
-    stream.on(`end`, () => resolve(Buffer.concat(chunks).toString(`utf8`)))
-    stream.on(`error`, reject)
-  })
-}
-
-async function watchAndPushLive(opts: WatchOptions): Promise<void> {
-  let lastByteOffset = statSync(opts.sourcePath).size
-  // Buffer for a trailing partial line (no \n yet) — held until next tick.
-  let partialLineBuffer = ``
-  let busy = false
-  let pending = false
-  let stopping = false
-
-  const nativeStream = await createOrConnectStream(
-    opts.nativeUrl,
-    `application/json`
   )
-  const normalizedStream = await createOrConnectStream(
-    opts.normalizedUrl,
-    `application/json`
-  )
+}
 
-  async function processChanges(): Promise<void> {
-    if (stopping) return
-    if (busy) {
-      pending = true
-      return
-    }
-    busy = true
-    try {
-      const stat = statSync(opts.sourcePath)
-      // File was truncated/replaced — re-read from start
-      if (stat.size < lastByteOffset) {
-        lastByteOffset = 0
-        partialLineBuffer = ``
-      }
-      if (stat.size === lastByteOffset) return
-
-      // Read only the new bytes since the last tick
-      const newBytes = await readByteRange(
-        opts.sourcePath,
-        lastByteOffset,
-        stat.size
-      )
-      lastByteOffset = stat.size
-
-      // Combine with any partial line carried over from last tick
-      const combined = partialLineBuffer + newBytes
-      const lastNewlineIdx = combined.lastIndexOf(`\n`)
-      let completeChunk: string
-      if (lastNewlineIdx === -1) {
-        // No newline at all — entire chunk is partial
-        partialLineBuffer = combined
-        completeChunk = ``
-      } else {
-        completeChunk = combined.slice(0, lastNewlineIdx)
-        partialLineBuffer = combined.slice(lastNewlineIdx + 1)
-      }
-
-      const unfilteredNewLines = completeChunk
-        .split(`\n`)
-        .filter((l) => l.trim())
-      if (unfilteredNewLines.length === 0) return
-
-      // Run the batch through the stateful skill-invocation filter.
-      // State is shared with the initial export, so a /share round that
-      // straddles the snapshot boundary is stripped as a single round.
-      const newRawLines = opts.skillFilter.feed(unfilteredNewLines)
-      if (newRawLines.length === 0) return
-
-      // Push new native lines as-is
-      await Promise.all(newRawLines.map((line) => nativeStream.append(line)))
-
-      // Incrementally normalize ONLY the new lines.
-      // - fromCompaction: false → don't try to find a compaction boundary
-      //   (we want to process every new line as a continuation)
-      // - filter out synthetic session_init that the normalizer auto-injects
-      //   when no system/init is present in the input (we already emitted one
-      //   on the first push)
-      const newEvents = normalize(newRawLines, opts.agent, {
-        fromCompaction: false,
-      }).filter((e) => e.type !== `session_init`)
-
-      if (newEvents.length > 0) {
-        await Promise.all(
-          newEvents.map((event) =>
-            normalizedStream.append(JSON.stringify(event))
-          )
-        )
-      }
-
-      const ts = new Date().toISOString().slice(11, 19)
-      console.error(
-        `[${ts}] +${newRawLines.length} native, +${newEvents.length} normalized`
-      )
-    } catch (error) {
-      console.error(
-        `  Watcher error: ${error instanceof Error ? error.message : error}`
-      )
-    } finally {
-      busy = false
-      // eslint can't see that `stopping` is reassigned inside the SIGINT
-      // handler closure below, so it thinks `!stopping` is always true.
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-      if (pending && !stopping) {
-        pending = false
-        void processChanges()
-      }
-    }
-  }
-
-  const watcher = watch(opts.sourcePath, () => {
-    void processChanges()
-  })
-
-  // Also poll periodically as a safety net (fs.watch can miss events on macOS/NFS)
-  const pollInterval = setInterval(() => {
-    void processChanges()
-  }, 2000)
-
-  await new Promise<void>((resolve) => {
-    const handleSignal = async (): Promise<void> => {
-      stopping = true
-      clearInterval(pollInterval)
-      watcher.close()
-      console.error(``)
-      console.error(`Stopping live share — emitting session_end`)
-      try {
-        const endEvent: NormalizedEvent = {
-          v: 1,
-          ts: Date.now(),
-          type: `session_end`,
-        }
-        await normalizedStream.append(JSON.stringify(endEvent))
-      } catch (error) {
+function syncProgressLogger(live: boolean) {
+  return (event: SyncProgressEvent): void => {
+    switch (event.type) {
+      case `session-found`:
         console.error(
-          `  Failed to emit session_end: ${
-            error instanceof Error ? error.message : error
-          }`
+          `Exporting ${event.agent} session ${live ? `(live)` : `(snapshot)`}: ${event.sessionId}`
         )
+        console.error(`  Path: ${event.path}`)
+        break
+      case `normalized-pushed`:
+        console.error(
+          event.count > 0
+            ? `  Pushed ${event.count} normalized events`
+            : `  Normalized stream up to date`
+        )
+        break
+      case `native-pushed`:
+        console.error(
+          event.count > 0
+            ? `  Pushed ${event.count} native ${event.agent} lines`
+            : `  Native ${event.agent} stream up to date`
+        )
+        break
+      case `queue-stream-ready`:
+        console.error(`  Queue stream ready: ${event.queueUrl}`)
+        break
+      case `queue-stream-failed`:
+        console.error(
+          `  Failed to create queue stream (collab disabled): ${event.reason}`
+        )
+        break
+      case `live-watching`:
+        console.error(``)
+        console.error(`Watching ${event.path}`)
+        console.error(`Press Ctrl-C to stop sharing.`)
+        break
+      case `live-batch`: {
+        const ts = new Date().toISOString().slice(11, 19)
+        console.error(
+          `[${ts}] +${event.native} native, +${event.normalized} normalized`
+        )
+        break
       }
-      resolve()
+      case `live-stopping`:
+        console.error(``)
+        console.error(`Stopping live share — emitting session_end`)
+        break
+      case `live-error`:
+        console.error(`  Watcher error: ${event.message}`)
+        break
     }
-
-    process.once(`SIGINT`, () => void handleSignal())
-    process.once(`SIGTERM`, () => void handleSignal())
-  })
+  }
 }
 
 async function createShortUrl(
@@ -610,20 +190,137 @@ async function createShortUrl(
   }
 }
 
-async function resolveShortUrl(url: string): Promise<string | null> {
-  // Short URLs are registered on a shortener service and return JSON
-  // with the actual DS URL when fetched with Accept: application/json.
+async function exportSession(
+  args: Record<string, string | boolean>,
+  positional: Array<string>
+): Promise<void> {
+  const server =
+    (args.server as string | undefined) ??
+    positional[0] ??
+    process.env.CAPI_SERVER
+  if (!server) {
+    console.error(
+      `Usage: capi export --server <url> [--agent claude|codex] [--session <id>]`
+    )
+    console.error(`  Or set the CAPI_SERVER environment variable.`)
+    process.exit(1)
+  }
+
+  const agent =
+    (args.agent as AgentType | undefined) ?? detectAgent() ?? undefined
+  // When `/share` runs inside a CC session, prefer the calling session
+  // over whatever `resolveSession` would auto-pick from readdir order.
+  const sessionId =
+    (args.session as string | undefined) ?? detectCallingSessionId()
+  const live = args.live === true
+  const shortener =
+    (args.shortener as string | undefined) ?? process.env.CAPI_SHORTENER
+  const token = resolveToken(args)
+
+  // Snapshot shares get a unique shareId so each export is addressable
+  // separately; live shares reuse a stable `live` shareId so the same URL
+  // keeps receiving deltas.
+  const shareId = live ? `live` : randomUUID()
+
+  let result
   try {
-    const response = await fetch(url, {
-      headers: { accept: `application/json` },
+    result = await syncSession({
+      sessionId,
+      agent,
+      serverUrl: server,
+      token,
+      shareId,
+      live,
+      onProgress: syncProgressLogger(live),
     })
-    if (!response.ok) return null
-    const contentType = response.headers.get(`content-type`) ?? ``
-    if (!contentType.includes(`application/json`)) return null
-    const data = (await response.json()) as { fullUrl?: string }
-    return data.fullUrl ?? null
-  } catch {
-    return null
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error)
+    process.exit(1)
+  }
+
+  let outputUrl = result.url
+  if (shortener) {
+    const shortUrl = await createShortUrl(shortener, {
+      fullUrl: result.baseUrl,
+      sessionId: result.sessionId,
+      entryCount: result.totalEvents,
+      agent: result.agent,
+      token: token ?? ``,
+      live,
+    })
+    if (shortUrl) {
+      console.error(`  Short URL: ${shortUrl}`)
+      outputUrl = shortUrl
+    } else {
+      console.error(`  Shortener failed, using full URL`)
+    }
+  }
+
+  if (!live) {
+    console.log(outputUrl)
+    return
+  }
+
+  console.log(outputUrl)
+
+  // Publish the collab config file so the queue-channel MCP subprocess
+  // (already running under CC if the user started claude with
+  // --dangerously-load-development-channels server:queue) can pick up
+  // the session's queue URL and start forwarding prompts.
+  if (result.queueUrl) {
+    const collabPath = writeCollabConfig({
+      sessionId: result.sessionId,
+      dsBase: server,
+      queueUrl: result.queueUrl,
+      token,
+    })
+    console.error(`  Collab config: ${collabPath}`)
+  }
+
+  // Wait for a termination signal, then flush the live watcher and clean
+  // up the collab config.
+  await new Promise<void>((resolve) => {
+    const handleSignal = async (): Promise<void> => {
+      try {
+        await result.stop?.()
+      } catch {
+        // best-effort
+      }
+      removeCollabConfig()
+      resolve()
+    }
+    process.once(`SIGINT`, () => void handleSignal())
+    process.once(`SIGTERM`, () => void handleSignal())
+  })
+}
+
+function importProgressLogger() {
+  return (event: ImportProgressEvent): void => {
+    switch (event.type) {
+      case `short-url-resolved`:
+        console.error(`Resolved short URL → ${event.to}`)
+        break
+      case `using-native`:
+        console.error(`  Found native stream — using lossless resume`)
+        break
+      case `using-normalized`:
+        console.error(
+          `  No native stream — using normalized (cross-agent)`
+        )
+        console.error(`  Read ${event.eventCount} normalized events`)
+        break
+      case `denormalized`:
+        console.error(`  Denormalized: ${event.lineCount} lines`)
+        break
+      case `rewritten`:
+        console.error(
+          `  Rewritten ${event.count} lines (${event.oldSessionId} → ${event.newSessionId})`
+        )
+        break
+      case `written`:
+        console.error(`  Wrote: ${event.path}`)
+        break
+    }
   }
 }
 
@@ -646,88 +343,43 @@ async function importSession(
   }
   const agent: AgentType = agentArg
 
-  // Try resolving as a short URL first. If the URL returns JSON with a
-  // fullUrl field, use that; otherwise treat the input as a direct DS URL.
-  let streamUrl = inputUrl
-  const resolved = await resolveShortUrl(inputUrl)
-  if (resolved) {
-    streamUrl = resolved
-    console.error(`Resolved short URL → ${streamUrl}`)
-  }
-
   const cwd = (args.cwd as string | undefined) ?? process.cwd()
   const shouldResume = args.resume === true
-  const newSessionId = randomUUID()
+  const token = resolveToken(args)
 
-  console.error(`Importing from: ${streamUrl}`)
+  console.error(`Importing from: ${inputUrl}`)
   console.error(`  Target agent: ${agent}`)
   console.error(`  CWD: ${cwd}`)
 
-  // Try native stream first (same-agent, lossless)
-  const nativeUrl = `${streamUrl}/native/${agent}`
-  const hasNative = await streamExists(nativeUrl)
-
-  let sessionPath: string
-
-  if (hasNative) {
-    console.error(`  Found native ${agent} stream — using lossless resume`)
-    const nativeLines = (await readStream<string>(nativeUrl)).map((item) =>
-      typeof item === `string` ? item : JSON.stringify(item)
-    )
-
-    const meta = extractSessionMeta(nativeLines, agent)
-    const rewrittenLines = rewriteNativeLines(
-      nativeLines,
+  let result
+  try {
+    result = await libImportSession({
+      url: inputUrl,
       agent,
-      newSessionId,
       cwd,
-      meta.sessionId,
-      meta.cwd
-    )
-
-    console.error(
-      `  Rewritten ${rewrittenLines.length} lines (${meta.sessionId} → ${newSessionId})`
-    )
-
-    if (agent === `claude`) {
-      sessionPath = writeClaudeSession(newSessionId, cwd, rewrittenLines)
-    } else {
-      sessionPath = writeCodexSession(newSessionId, rewrittenLines)
-    }
-  } else {
-    console.error(
-      `  No native ${agent} stream — using normalized (cross-agent)`
-    )
-    const events = await readStream<NormalizedEvent>(streamUrl)
-    console.error(`  Read ${events.length} normalized events`)
-
-    const lines = denormalize(events, agent, { sessionId: newSessionId, cwd })
-    console.error(`  Denormalized: ${lines.length} lines`)
-
-    if (agent === `claude`) {
-      sessionPath = writeClaudeSession(newSessionId, cwd, lines)
-    } else {
-      sessionPath = writeCodexSession(newSessionId, lines)
-    }
+      token,
+      onProgress: importProgressLogger(),
+    })
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : error)
+    process.exit(1)
   }
 
-  console.error(`  Wrote: ${sessionPath}`)
-
   if (agent === `claude`) {
-    console.log(`Session ID: ${newSessionId}`)
-    console.log(`Resume with: claude --resume ${newSessionId}`)
+    console.log(`Session ID: ${result.sessionId}`)
+    console.log(`Resume with: claude --resume ${result.sessionId}`)
   } else {
-    console.log(`Thread ID: ${newSessionId}`)
-    console.log(`Resume with: codex resume ${newSessionId}`)
+    console.log(`Thread ID: ${result.sessionId}`)
+    console.log(`Resume with: codex resume ${result.sessionId}`)
   }
 
   if (shouldResume) {
     const cmd =
       agent === `claude`
-        ? `claude --resume ${newSessionId}`
-        : `codex resume ${newSessionId}`
+        ? `claude --resume ${result.sessionId}`
+        : `codex resume ${result.sessionId}`
     console.error(`  Launching ${agent}...`)
-    execSync(cmd, { stdio: `inherit`, cwd })
+    execSync(cmd, { stdio: `inherit`, cwd: result.cwd })
   }
 }
 
@@ -977,7 +629,7 @@ function resolveTrackedAgent(
 /** Read the Claude session slug from the first entry that has one. */
 function readClaudeSlug(jsonlPath: string): string | null {
   try {
-    const content = fs.readFileSync(jsonlPath, `utf-8`)
+    const content = readFileSync(jsonlPath, `utf-8`)
     for (const line of content.split(`\n`)) {
       if (!line.trim()) continue
       try {
@@ -1038,7 +690,8 @@ async function cmdCheckin(
   requireCapiConfig(repoRoot)
   const checkinAgent = resolveTrackedAgent(args, repoRoot, true)!
 
-  let sessionId = args.session as string | undefined
+  let sessionId =
+    (args.session as string | undefined) ?? detectCallingSessionId()
   let cwd: string | undefined
   let match: DiscoveredSession | undefined
 
@@ -1070,10 +723,10 @@ async function cmdCheckin(
   }
 
   const resolvedCwd = cwd ?? process.cwd()
-  const realCwd = fs.existsSync(resolvedCwd)
-    ? fs.realpathSync(resolvedCwd)
+  const realCwd = existsSync(resolvedCwd)
+    ? realpathSync(resolvedCwd)
     : resolvedCwd
-  const realRoot = fs.realpathSync(repoRoot)
+  const realRoot = realpathSync(repoRoot)
   let relativeCwd: string
   if (realCwd.startsWith(realRoot)) {
     const rel = realCwd.slice(realRoot.length + 1)
@@ -1284,14 +937,14 @@ git add .capi/sessions/ 2>/dev/null || true
 `
 
   if (
-    fs.existsSync(hookPath) &&
-    !fs.readFileSync(hookPath, `utf-8`).includes(`capi`)
+    existsSync(hookPath) &&
+    !readFileSync(hookPath, `utf-8`).includes(`capi`)
   ) {
-    fs.appendFileSync(hookPath, `\n${hookContent}`)
+    appendFileSync(hookPath, `\n${hookContent}`)
     console.log(`Appended capi to existing pre-commit hook.`)
   } else {
-    fs.writeFileSync(hookPath, hookContent)
-    fs.chmodSync(hookPath, `755`)
+    writeFileSync(hookPath, hookContent)
+    chmodSync(hookPath, `755`)
     console.log(`Installed pre-commit hook: ${hookPath}`)
   }
   console.log(`Tracked sessions will be auto-pushed on each commit.`)
@@ -1334,14 +987,6 @@ Environment variables:
 
 async function main(): Promise<void> {
   const { command, args, positional } = parseArgs(process.argv.slice(2))
-
-  const token =
-    (args.token as string | undefined) ??
-    process.env.CAPI_TOKEN ??
-    process.env.DS_TOKEN
-  if (token) {
-    globalHeaders = { Authorization: `Bearer ${token}` }
-  }
 
   switch (command) {
     case `export`:

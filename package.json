@@ -1,7 +1,7 @@
 {
   "name": "agent-session-protocol",
   "description": "Normalized format for agent coding sessions — and a reference CLI (`capi`) for sharing / resuming / tracking sessions across machines and agents (Claude Code, Codex).",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

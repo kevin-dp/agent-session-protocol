@@ -20,7 +20,7 @@ If the user's argument is exactly `live` (case-insensitive), use live mode. Othe
 
 ## Prerequisites
 
-The `asp` CLI must be available (from `@durable-streams/agent-session-protocol`).
+The `capi` CLI must be available (from the `agent-session-protocol` npm package).
 
 The Durable Streams server URL must be configured via the `CAPI_SERVER` environment variable, or passed with `--server`. If the server requires auth, set `CAPI_TOKEN` or pass `--token`.
 
@@ -37,27 +37,37 @@ If the user hasn't done this setup, `/share live` still works for read-only live
 
 ## Steps
 
-1. Determine the current session ID from your own context. For Claude Code it's typically a UUID in the session metadata. For Codex it's the thread ID.
+Agent type is auto-detected. If auto-detection fails, pass `--agent claude` or `--agent codex` explicitly. The calling session ID is also picked up automatically when running inside a CC session.
 
-2. Run the appropriate command:
+1. Run the appropriate command:
 
    **Snapshot** (`/share`):
 
    ```bash
-   capi export --session <current-session-id>
+   capi export
    ```
 
-   **Live** (`/share live`) — must be backgrounded with `&` so the agent session can continue:
+   The share URL is the last line printed to stdout.
+
+   **Live** (`/share live`) — must be backgrounded so the agent session can continue. A plain `capi export --live &` doesn't work because the URL is printed AFTER the initial push returns, so capturing it requires redirecting to a file and polling:
 
    ```bash
-   capi export --session <current-session-id> --live &
+   OUT=$(mktemp /tmp/capi-live.XXXXXX)
+   capi export --live > "$OUT" 2>&1 &
+   PID=$!
+   for i in 1 2 3 4 5 6 7 8 9 10; do
+     URL=$(grep -oE 'https?://[^ ]+' "$OUT" | tail -1)
+     [ -n "$URL" ] && break
+     sleep 0.5
+   done
+   echo "URL: $URL"
+   echo "PID: $PID"
+   echo "Log: $OUT"
    ```
 
-   Agent type is auto-detected. If auto-detection fails, pass `--agent claude` or `--agent codex` explicitly.
+   Record both `URL` and `PID` — the user will need the PID to stop the share. If `URL` is still empty after the loop, fall back to printing the contents of `$OUT` so the user can see what went wrong.
 
-3. Parse stdout. The last printed line is the share URL. If a shortener is configured it's a short URL (e.g. `https://share.electric-sql.cloud/abc12345`); otherwise it's the full DS URL.
-
-4. Tell the user, adapting based on mode:
+2. Tell the user, adapting based on mode:
 
    **Snapshot mode:**
    - A snapshot of this session has been shared at: **\<share-url\>**
@@ -74,8 +84,8 @@ If the user hasn't done this setup, `/share live` still works for read-only live
    **Live mode:**
    - This session is now being **live-shared** at: **\<share-url\>**
    - The share will keep updating as the conversation grows. Anyone with the URL can open it in a browser to watch the session unfold in real-time (with a valid auth token).
-   - **If Claude was started with `--dangerously-load-development-channels server:queue`**: viewers can also type prompts on the share page; they arrive as `<channel source="queue" user="...">` events and Claude responds to them automatically. See [One-time setup for live collaboration](#one-time-setup-for-live-collaboration-optional).
-   - To stop sharing, kill the background `capi export --live` process.
+   - **If Claude was started with `--dangerously-load-development-channels server:queue`**: viewers can also type prompts on the share page; they arrive as `<channel source="queue" user="...">` events and Claude responds to them automatically. See the "One-time setup for live collaboration" section above.
+   - To stop sharing: `kill <PID>` (or `pkill -f 'capi export --live'` if the PID is lost).
    - To resume the current state from the CLI in Claude Code:
      ```bash
      capi import <share-url> --agent claude --resume
@@ -92,4 +102,4 @@ In both cases, importing requires a valid auth token. Add `--token <token>` if n
 
 - Same-agent resume (Claude → Claude or Codex → Codex) is lossless — full history preserved via a native stream.
 - Cross-agent resume (Claude → Codex or Codex → Claude) uses the normalized format — semantic content is preserved but tool calls are represented generically.
-- Snapshot URLs are unique per export. Live URLs are stable per session.
+- Snapshot URLs are unique per export. Live URLs are stable for the lifetime of a single agent session — if the user restarts their agent, `/share live` produces a new URL.
