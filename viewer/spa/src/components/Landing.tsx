@@ -80,11 +80,17 @@ export function Landing({
         <dd>{entry.sessionId}</dd>
       </dl>
 
+      <EmbeddedSession
+        entry={entry}
+        token={activeToken}
+        onSubmitToken={onWatch}
+      />
+
       <div className="prereq">
         <h2>Prerequisites</h2>
         <p className="prereq-intro">
-          To resume this session you need the <code>asp</code> CLI installed and
-          a valid auth token for the underlying Durable Streams server.
+          To resume this session you need the <code>capi</code> CLI installed
+          and a valid auth token for the underlying Durable Streams server.
         </p>
         <CodeBlock code={installCmd} />
       </div>
@@ -98,12 +104,6 @@ export function Landing({
       <p className="subtle">
         You need a valid auth token to actually import the session.
       </p>
-
-      <EmbeddedSession
-        entry={entry}
-        token={activeToken}
-        onSubmitToken={onWatch}
-      />
     </div>
   )
 }
