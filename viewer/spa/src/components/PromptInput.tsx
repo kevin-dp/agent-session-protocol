@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
 
 const NAME_STORAGE_KEY = `live-share-user-name`
 
@@ -32,6 +32,16 @@ export function PromptInput({ fullUrl, token, disabled }: Props): JSX.Element {
     const id = setTimeout(() => setSubmitState({ kind: `idle` }), 2000)
     return () => clearTimeout(id)
   }, [submitState])
+
+  // Auto-grow the textarea to fit its content. Runs after every render that
+  // changes `text` — including when we clear it on submit, which shrinks the
+  // box back to its min-height via the CSS `min-height`.
+  useLayoutEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = `auto`
+    el.style.height = `${el.scrollHeight}px`
+  }, [text])
 
   const persistName = (next: string): void => {
     setName(next)
@@ -141,7 +151,6 @@ export function PromptInput({ fullUrl, token, disabled }: Props): JSX.Element {
               ? `Session ended — no active agent to receive prompts.`
               : `Type a prompt for the live session. Enter to send; Shift+Enter for a new line.`
           }
-          rows={2}
           disabled={disabled}
           aria-label="Prompt for live session"
         />
