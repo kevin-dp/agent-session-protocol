@@ -1,13 +1,16 @@
 import {
   appendFileSync,
   chmodSync,
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
   realpathSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs"
 import { randomUUID } from "node:crypto"
 import { execSync } from "node:child_process"
@@ -17,6 +20,7 @@ import { fileURLToPath } from "node:url"
 import {
   discoverSessions,
   importSession as libImportSession,
+  resolveSession,
   syncSession,
 } from "../index.js"
 import type {
@@ -222,15 +226,25 @@ async function exportSession(
   // keeps receiving deltas.
   const shareId = live ? `live` : randomUUID()
 
-  // Refuse to start a second live share — duplicate watchers push the
-  // same events to the same stream and the viewer shows every message
-  // twice.
-  if (live) acquireLiveLock()
+  // For live mode: resolve the session up front so we can lock on its
+  // ID. Two live shares for the same session push duplicate events to
+  // the same stream; different sessions are independent.
+  let resolvedSessionId: string | undefined
+  if (live) {
+    try {
+      const resolved = await resolveSession(sessionId, agent)
+      resolvedSessionId = resolved.sessionId
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : error)
+      process.exit(1)
+    }
+    acquireLiveLock(resolvedSessionId)
+  }
 
   let result
   try {
     result = await syncSession({
-      sessionId,
+      sessionId: resolvedSessionId ?? sessionId,
       agent,
       serverUrl: server,
       token,
@@ -239,7 +253,7 @@ async function exportSession(
       onProgress: syncProgressLogger(live),
     })
   } catch (error) {
-    if (live) releaseLiveLock()
+    if (resolvedSessionId) releaseLiveLock(resolvedSessionId)
     console.error(error instanceof Error ? error.message : error)
     process.exit(1)
   }
@@ -293,7 +307,7 @@ async function exportSession(
         // best-effort
       }
       removeCollabConfig()
-      releaseLiveLock()
+      if (resolvedSessionId) releaseLiveLock(resolvedSessionId)
       resolve()
     }
     process.once(`SIGINT`, () => void handleSignal())
@@ -543,50 +557,79 @@ function installChannel(): void {
  * queue URL and auth token. The subprocess watches
  * ~/.capi/active-collab.json via fs.watch.
  */
-const LIVE_LOCK_PATH = join(homedir(), `.capi`, `live-share.pid`)
-
 /**
- * Global mutex for `capi export --live`. Two concurrent live-share
- * processes — even for different sessions — push to overlapping DS
- * streams and write conflicting `~/.capi/active-collab.json` values,
- * which surfaces in viewers as duplicated messages and in the
- * queue-channel MCP as wrong-session prompt delivery. Keep it simple:
- * one at a time per machine, global.
+ * Per-session mutex for `capi export --live`. Two concurrent live-share
+ * processes for the *same* session push the same events to the same DS
+ * stream, so viewers see every message twice. Different sessions are
+ * independent — no lock contention there.
  *
- * Stale locks (process killed uncleanly) are detected via the PID check
- * and overwritten — no manual recovery required.
+ * Lock file: `~/.capi/live-shares/<sessionId>.pid`. Atomic create via
+ * `O_EXCL` so a tight race between two launches can't both pass the
+ * check. Stale locks (process killed uncleanly) are detected via PID
+ * liveness and overwritten — no manual recovery required.
  */
-function acquireLiveLock(): void {
-  if (existsSync(LIVE_LOCK_PATH)) {
-    try {
-      const existingPid = parseInt(
-        readFileSync(LIVE_LOCK_PATH, `utf8`).trim(),
-        10
-      )
-      if (Number.isFinite(existingPid) && isPidAlive(existingPid)) {
-        console.error(
-          `Another 'capi export --live' is already running (pid ${existingPid}).`
-        )
-        console.error(`Stop it first:  kill ${existingPid}`)
-        console.error(`Or if you know it's stuck:  rm ${LIVE_LOCK_PATH}`)
-        process.exit(1)
-      }
-      // stale lock — fall through and overwrite
-    } catch {
-      // malformed lock file — overwrite
-    }
-  }
-  mkdirSync(dirname(LIVE_LOCK_PATH), { recursive: true })
-  writeFileSync(LIVE_LOCK_PATH, String(process.pid))
+function liveLockPath(sessionId: string): string {
+  return join(homedir(), `.capi`, `live-shares`, `${sessionId}.pid`)
 }
 
-function releaseLiveLock(): void {
+function acquireLiveLock(sessionId: string): void {
+  const path = liveLockPath(sessionId)
+  mkdirSync(dirname(path), { recursive: true })
+
+  const tryCreate = (): boolean => {
+    try {
+      const fd = openSync(path, `wx`)
+      writeSync(fd, String(process.pid))
+      closeSync(fd)
+      return true
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== `EEXIST`) throw err
+      return false
+    }
+  }
+
+  if (tryCreate()) return
+
+  // File exists — check if it's stale
+  let existingPid = NaN
+  try {
+    existingPid = parseInt(readFileSync(path, `utf8`).trim(), 10)
+  } catch {
+    // malformed — treat as stale
+  }
+
+  if (Number.isFinite(existingPid) && isPidAlive(existingPid)) {
+    console.error(
+      `Another 'capi export --live' is already running for session ${sessionId.slice(0, 8)} (pid ${existingPid}).`
+    )
+    console.error(`Stop it first:  kill ${existingPid}`)
+    console.error(`Or if you know it's stuck:  rm ${path}`)
+    process.exit(1)
+  }
+
+  // Stale — clobber and retry once.
+  try {
+    unlinkSync(path)
+  } catch {
+    // race: someone else released between our check and unlink — fine
+  }
+  if (!tryCreate()) {
+    // race lost to a new legitimate owner that grabbed it just now
+    console.error(
+      `Another 'capi export --live' just started for session ${sessionId.slice(0, 8)}. Retry if you still want to take over.`
+    )
+    process.exit(1)
+  }
+}
+
+function releaseLiveLock(sessionId: string): void {
+  const path = liveLockPath(sessionId)
   try {
     // Only remove if it's still ours — avoid clobbering a newer owner
     // that took over after a stale-detection overwrite.
-    if (existsSync(LIVE_LOCK_PATH)) {
-      const pid = parseInt(readFileSync(LIVE_LOCK_PATH, `utf8`).trim(), 10)
-      if (pid === process.pid) unlinkSync(LIVE_LOCK_PATH)
+    if (existsSync(path)) {
+      const pid = parseInt(readFileSync(path, `utf8`).trim(), 10)
+      if (pid === process.pid) unlinkSync(path)
     }
   } catch {
     // best-effort
