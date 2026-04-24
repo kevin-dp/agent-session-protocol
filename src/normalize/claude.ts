@@ -76,6 +76,29 @@ function extractTextFromContent(
     .join(`\n`)
 }
 
+/**
+ * Unwrap the `<channel source="..." user="..." ts="...">...</channel>`
+ * envelope that Claude Code wraps queue-channel submissions in. Both
+ * direct user messages (the first prompt in a burst) and queued_command
+ * attachments (subsequent prompts) carry this wrapper. Returning the
+ * inner text + extracted `user` makes the normalized event render cleanly
+ * in viewers without the envelope noise.
+ */
+function unwrapChannelEnvelope(
+  text: string
+): { text: string; user?: { name: string } } {
+  const trimmed = text.trim()
+  const outer = trimmed.match(/^<channel\s+([^>]+)>([\s\S]*?)<\/channel>$/)
+  if (!outer) return { text }
+  const attrs = outer[1]!
+  const inner = outer[2]!.trim()
+  const userMatch = attrs.match(/user="([^"]*)"/)
+  return {
+    text: inner,
+    user: userMatch ? { name: userMatch[1]! } : undefined,
+  }
+}
+
 function findLastCompactionIndex(entries: Array<ClaudeEntry>): number {
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i]!
@@ -198,10 +221,24 @@ export function normalizeClaude(
         // Also extract user text
         const text = extractTextFromContent(content)
         if (text) {
-          events.push({ v: 1, ts, type: `user_message`, text })
+          const { text: unwrapped, user } = unwrapChannelEnvelope(text)
+          events.push({
+            v: 1,
+            ts,
+            type: `user_message`,
+            text: unwrapped,
+            ...(user && { user }),
+          })
         }
       } else if (typeof content === `string` && content) {
-        events.push({ v: 1, ts, type: `user_message`, text: content })
+        const { text: unwrapped, user } = unwrapChannelEnvelope(content)
+        events.push({
+          v: 1,
+          ts,
+          type: `user_message`,
+          text: unwrapped,
+          ...(user && { user }),
+        })
       }
 
       continue
@@ -222,11 +259,15 @@ export function normalizeClaude(
         typeof attachment.prompt === `string` &&
         attachment.prompt.length > 0
       ) {
+        const { text: unwrapped, user } = unwrapChannelEnvelope(
+          attachment.prompt
+        )
         events.push({
           v: 1,
           ts,
           type: `user_message`,
-          text: attachment.prompt,
+          text: unwrapped,
+          ...(user && { user }),
         })
       }
       continue

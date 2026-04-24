@@ -135,7 +135,32 @@ describe(`normalize claude`, () => {
     if (userMsgs[1]!.type !== `user_message`) return
     if (userMsgs[2]!.type !== `user_message`) return
     expect(userMsgs[0]!.text).toBe(`first prompt`)
-    expect(userMsgs[1]!.text).toContain(`second prompt`)
-    expect(userMsgs[2]!.text).toContain(`third prompt`)
+    // The channel envelope is stripped and the user attribute is lifted
+    // onto the event so viewers don't need to parse XML.
+    expect(userMsgs[1]!.text).toBe(`second prompt`)
+    expect(userMsgs[1]!.user).toEqual({ name: `anonymous` })
+    expect(userMsgs[2]!.text).toBe(`third prompt`)
+    expect(userMsgs[2]!.user).toEqual({ name: `Sam` })
+  })
+
+  it(`unwraps channel envelope on direct user messages`, () => {
+    // First prompt in a burst lands as type="user" with the channel
+    // envelope directly in message.content — same unwrap applies.
+    const line = JSON.stringify({
+      type: `user`,
+      message: {
+        role: `user`,
+        content: `<channel source="queue" user="Chromy" ts="1777024532105">\nWhat is the magic word?\n</channel>`,
+      },
+      uuid: `u-direct`,
+      timestamp: `2026-04-24T10:00:00Z`,
+    })
+
+    const evts = normalize([line], `claude`)
+    const userMsg = evts.find((e) => e.type === `user_message`)!
+    expect(userMsg).toBeDefined()
+    if (userMsg.type !== `user_message`) return
+    expect(userMsg.text).toBe(`What is the magic word?`)
+    expect(userMsg.user).toEqual({ name: `Chromy` })
   })
 })
