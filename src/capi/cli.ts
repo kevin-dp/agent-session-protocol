@@ -222,6 +222,11 @@ async function exportSession(
   // keeps receiving deltas.
   const shareId = live ? `live` : randomUUID()
 
+  // Refuse to start a second live share — duplicate watchers push the
+  // same events to the same stream and the viewer shows every message
+  // twice.
+  if (live) acquireLiveLock()
+
   let result
   try {
     result = await syncSession({
@@ -234,6 +239,7 @@ async function exportSession(
       onProgress: syncProgressLogger(live),
     })
   } catch (error) {
+    if (live) releaseLiveLock()
     console.error(error instanceof Error ? error.message : error)
     process.exit(1)
   }
@@ -278,7 +284,7 @@ async function exportSession(
   }
 
   // Wait for a termination signal, then flush the live watcher and clean
-  // up the collab config.
+  // up the collab config + release the global live-share lock.
   await new Promise<void>((resolve) => {
     const handleSignal = async (): Promise<void> => {
       try {
@@ -287,6 +293,7 @@ async function exportSession(
         // best-effort
       }
       removeCollabConfig()
+      releaseLiveLock()
       resolve()
     }
     process.once(`SIGINT`, () => void handleSignal())
@@ -536,6 +543,65 @@ function installChannel(): void {
  * queue URL and auth token. The subprocess watches
  * ~/.capi/active-collab.json via fs.watch.
  */
+const LIVE_LOCK_PATH = join(homedir(), `.capi`, `live-share.pid`)
+
+/**
+ * Global mutex for `capi export --live`. Two concurrent live-share
+ * processes — even for different sessions — push to overlapping DS
+ * streams and write conflicting `~/.capi/active-collab.json` values,
+ * which surfaces in viewers as duplicated messages and in the
+ * queue-channel MCP as wrong-session prompt delivery. Keep it simple:
+ * one at a time per machine, global.
+ *
+ * Stale locks (process killed uncleanly) are detected via the PID check
+ * and overwritten — no manual recovery required.
+ */
+function acquireLiveLock(): void {
+  if (existsSync(LIVE_LOCK_PATH)) {
+    try {
+      const existingPid = parseInt(
+        readFileSync(LIVE_LOCK_PATH, `utf8`).trim(),
+        10
+      )
+      if (Number.isFinite(existingPid) && isPidAlive(existingPid)) {
+        console.error(
+          `Another 'capi export --live' is already running (pid ${existingPid}).`
+        )
+        console.error(`Stop it first:  kill ${existingPid}`)
+        console.error(`Or if you know it's stuck:  rm ${LIVE_LOCK_PATH}`)
+        process.exit(1)
+      }
+      // stale lock — fall through and overwrite
+    } catch {
+      // malformed lock file — overwrite
+    }
+  }
+  mkdirSync(dirname(LIVE_LOCK_PATH), { recursive: true })
+  writeFileSync(LIVE_LOCK_PATH, String(process.pid))
+}
+
+function releaseLiveLock(): void {
+  try {
+    // Only remove if it's still ours — avoid clobbering a newer owner
+    // that took over after a stale-detection overwrite.
+    if (existsSync(LIVE_LOCK_PATH)) {
+      const pid = parseInt(readFileSync(LIVE_LOCK_PATH, `utf8`).trim(), 10)
+      if (pid === process.pid) unlinkSync(LIVE_LOCK_PATH)
+    }
+  } catch {
+    // best-effort
+  }
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
 function writeCollabConfig(opts: {
   sessionId: string
   dsBase: string
