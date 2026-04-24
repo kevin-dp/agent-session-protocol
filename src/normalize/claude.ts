@@ -207,6 +207,31 @@ export function normalizeClaude(
       continue
     }
 
+    // Claude Code stores prompts that arrive while an assistant turn is
+    // already in flight (e.g. queue-channel submissions from the viewer)
+    // as type="attachment" with attachment.type="queued_command". They
+    // never get rewritten into type="user" entries, so without this
+    // branch only the first prompt in a burst makes it into the
+    // normalized stream.
+    if (entry.type === `attachment`) {
+      const attachment = (entry as Record<string, unknown>).attachment as
+        | Record<string, unknown>
+        | undefined
+      if (
+        attachment?.type === `queued_command` &&
+        typeof attachment.prompt === `string` &&
+        attachment.prompt.length > 0
+      ) {
+        events.push({
+          v: 1,
+          ts,
+          type: `user_message`,
+          text: attachment.prompt,
+        })
+      }
+      continue
+    }
+
     if (entry.type === `assistant` || (!entry.type && entry.message?.role === `assistant`)) {
       const content = entry.message?.content
       if (!Array.isArray(content)) continue
