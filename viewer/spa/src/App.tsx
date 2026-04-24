@@ -9,10 +9,16 @@ function getShortIdFromPath(): string | null {
   return match ? match[1]! : null
 }
 
+// Hardcoded DS service token for the hosted viewer so visitors don't need
+// to paste it themselves. Scoped to this service's read-only streams; a
+// URL fragment token still overrides when present.
+const DEFAULT_TOKEN =
+  `eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzZXJ2aWNlX2lkIjoic3ZjLXNwb250YW5lb3VzLWdpcmFmZmUtNTFqeHU2ejE0ayIsImlhdCI6MTc3NjMyNzQwNn0.cR4gX36eDHFPydNO966ZT5K6VWXCzNd5GNtFa0D95OA`
+
 export function App(): JSX.Element {
   const [entry, setEntry] = useState<ResolvedEntry | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [token, setToken] = useState<string | null>(null)
+  const [token, setToken] = useState<string | null>(DEFAULT_TOKEN)
 
   useEffect(() => {
     const shortId = getShortIdFromPath()
@@ -54,7 +60,7 @@ export function App(): JSX.Element {
       <div className="container">
         <div className="brand">
           <span className="brand-dot"></span>
-          <span>Electric</span>
+          <span>Powered by Electric</span>
         </div>
         <h1>Not found</h1>
         <p className="lede">{error}</p>

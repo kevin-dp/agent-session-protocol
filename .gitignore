@@ -206,5 +206,5 @@ examples/yjs-demo/.tanstack
 .dev.vars
 .dev.vars.*
 
-# Generated wrangler config (see examples/viewer/wrangler.template.toml)
-examples/viewer/wrangler.toml
+# Generated wrangler config (see viewer/wrangler.template.toml)
+viewer/wrangler.toml

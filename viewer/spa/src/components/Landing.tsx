@@ -35,13 +35,13 @@ export function Landing({
 
   const claudeCmd = `capi import ${shortUrl} --agent claude --token <your-token> --resume`
   const codexCmd = `capi import ${shortUrl} --agent codex --token <your-token> --resume`
-  const installCmd = `npm install -g capi`
+  const installCmd = `npm install -g agent-session-protocol`
 
   return (
     <div className="container">
       <div className="brand">
         <span className="brand-dot"></span>
-        <span>Electric</span>
+        <span>Powered by Electric</span>
       </div>
 
       <h1>Shared agent session</h1>

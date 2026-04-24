@@ -8,9 +8,9 @@
     "config:generate": "node scripts/generate-wrangler.mjs",
     "build:spa": "pnpm --filter viewer-spa build",
     "predev": "pnpm config:generate && pnpm build:spa",
-    "predeploy": "pnpm config:generate && pnpm build:spa",
+    "predeploy-worker": "pnpm config:generate && pnpm build:spa",
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy-worker": "wrangler deploy",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

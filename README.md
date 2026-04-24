@@ -147,7 +147,7 @@ wrangler kv namespace create SHORTENER_KV
 export VIEWER_KV_NAMESPACE_ID=<id-from-above>
 export VIEWER_DOMAIN=share.yourdomain.com  # optional
 
-pnpm deploy
+pnpm deploy-worker
 ```
 
 The worker's `wrangler.toml` is generated from `wrangler.template.toml` at deploy time so no account-specific values are committed.

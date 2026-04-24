@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs"
+import { appendFileSync, mkdirSync, realpathSync, writeFileSync } from "node:fs"
 import { readdir, readFile, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { homedir } from "node:os"
@@ -10,6 +10,12 @@ export interface DiscoveredSession {
   path: string
   cwd?: string
   active: boolean
+  /**
+   * Last-modified time of the session's JSONL file (ms since epoch).
+   * Used as a tiebreaker when multiple candidate sessions match the same
+   * cwd — the session actively being written to has the newest mtime.
+   */
+  mtime: number
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -63,8 +69,12 @@ export async function discoverClaudeSessions(): Promise<
           sanitized,
           `${sessionId}.jsonl`
         )
-        const hasJsonl = await fileExists(jsonlPath)
-        if (!hasJsonl) continue
+        let jsonlStat
+        try {
+          jsonlStat = await stat(jsonlPath)
+        } catch {
+          continue
+        }
 
         sessions.push({
           agent: `claude`,
@@ -72,6 +82,7 @@ export async function discoverClaudeSessions(): Promise<
           path: jsonlPath,
           cwd,
           active: pid != null && isProcessAlive(pid),
+          mtime: jsonlStat.mtimeMs,
         })
       } catch {
         continue
@@ -125,12 +136,21 @@ export async function discoverCodexSessions(): Promise<
           // skip
         }
 
+        let fileMtime = 0
+        try {
+          const st = await stat(filePath)
+          fileMtime = st.mtimeMs
+        } catch {
+          // skip — leave mtime at 0
+        }
+
         sessions.push({
           agent: `codex`,
           sessionId: threadId,
           path: filePath,
           cwd,
           active: false, // can't easily detect active Codex sessions
+          mtime: fileMtime,
         })
       }
     } catch {
@@ -197,7 +217,7 @@ async function findClaudeJsonlById(
 /**
  * Resolve a session to its filesystem entry. Preference order:
  *   1. Exact sessionId match among discovered sessions.
- *   2. If no sessionId given → active session, else most-recent.
+ *   2. No sessionId given → layered auto-pick (see `pickLatestSession`).
  *   3. Fallback for Claude: scan JSONL files directly (older/continued sessions).
  *
  * Throws if no session can be located.
@@ -209,7 +229,7 @@ export async function resolveSession(
   const sessions = await discoverSessions(agent)
   let session = sessionId
     ? sessions.find((s) => s.sessionId === sessionId)
-    : (sessions.find((s) => s.active) ?? sessions[sessions.length - 1])
+    : pickLatestSession(sessions)
 
   if (!session && sessionId && (!agent || agent === `claude`)) {
     session = (await findClaudeSession(sessionId)) ?? undefined
@@ -225,6 +245,52 @@ export async function resolveSession(
   }
 
   return session
+}
+
+/**
+ * Choose a session when the caller didn't pass a sessionId. Layered to
+ * pick the one the caller most likely means:
+ *
+ *   1. Active session whose cwd matches `process.cwd()` → newest mtime.
+ *      This is the case when `capi export` runs inside an agent session
+ *      invoking its own `/share` skill — the calling agent's JSONL is
+ *      the one being actively appended to in that directory.
+ *   2. Any active session → newest mtime. When the caller's cwd doesn't
+ *      match any running agent (e.g. running `capi` from a shell in a
+ *      different directory), the most-recently-active agent wins.
+ *   3. No active sessions → most recently modified session overall.
+ *
+ * Cwd comparison uses both the raw string and the realpath-resolved form
+ * to handle symlink paths like `/tmp` → `/private/tmp` on macOS.
+ */
+function pickLatestSession(
+  sessions: Array<DiscoveredSession>
+): DiscoveredSession | undefined {
+  if (sessions.length === 0) return undefined
+
+  const activeCwd = process.cwd()
+  let resolvedCwd = activeCwd
+  try {
+    resolvedCwd = realpathSync(activeCwd)
+  } catch {
+    // cwd might not exist on disk in exotic shells — fall back to raw
+  }
+
+  const cwdMatches = (s: DiscoveredSession): boolean =>
+    s.cwd != null && (s.cwd === activeCwd || s.cwd === resolvedCwd)
+
+  const byMtimeDesc = (a: DiscoveredSession, b: DiscoveredSession): number =>
+    b.mtime - a.mtime
+
+  const activeMatching = sessions
+    .filter((s) => s.active && cwdMatches(s))
+    .sort(byMtimeDesc)
+  if (activeMatching[0]) return activeMatching[0]
+
+  const activeAny = sessions.filter((s) => s.active).sort(byMtimeDesc)
+  if (activeAny[0]) return activeAny[0]
+
+  return sessions.slice().sort(byMtimeDesc)[0]
 }
 
 export async function findClaudeSession(
