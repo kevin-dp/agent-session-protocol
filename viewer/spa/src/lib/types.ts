@@ -21,6 +21,16 @@ export interface UserMessageEvent {
   type: `user_message`
   text: string
   user?: { name: string; email?: string }
+  channelTs?: number
+}
+
+export interface UserMessageQueuedEvent {
+  v: 1
+  ts: number
+  type: `user_message_queued`
+  text: string
+  user?: { name: string; email?: string }
+  channelTs: number
 }
 
 export interface AssistantMessageEvent {
@@ -129,6 +139,7 @@ export interface SessionEndEvent {
 export type NormalizedEvent =
   | SessionInitEvent
   | UserMessageEvent
+  | UserMessageQueuedEvent
   | AssistantMessageEvent
   | ThinkingEvent
   | ToolCallEvent

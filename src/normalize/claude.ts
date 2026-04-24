@@ -81,21 +81,26 @@ function extractTextFromContent(
  * envelope that Claude Code wraps queue-channel submissions in. Both
  * direct user messages (the first prompt in a burst) and queued_command
  * attachments (subsequent prompts) carry this wrapper. Returning the
- * inner text + extracted `user` makes the normalized event render cleanly
- * in viewers without the envelope noise.
+ * inner text + extracted attributes lets the normalized event render
+ * cleanly in viewers and lets a `user_message_queued` event be paired
+ * with its eventual delivered `user_message` via `channelTs`.
  */
-function unwrapChannelEnvelope(
+function unwrapChannelEnvelope(text: string): {
   text: string
-): { text: string; user?: { name: string } } {
+  user?: { name: string }
+  channelTs?: number
+} {
   const trimmed = text.trim()
   const outer = trimmed.match(/^<channel\s+([^>]+)>([\s\S]*?)<\/channel>$/)
   if (!outer) return { text }
   const attrs = outer[1]!
   const inner = outer[2]!.trim()
   const userMatch = attrs.match(/user="([^"]*)"/)
+  const tsMatch = attrs.match(/ts="(\d+)"/)
   return {
     text: inner,
     user: userMatch ? { name: userMatch[1]! } : undefined,
+    channelTs: tsMatch ? parseInt(tsMatch[1]!, 10) : undefined,
   }
 }
 
@@ -221,26 +226,59 @@ export function normalizeClaude(
         // Also extract user text
         const text = extractTextFromContent(content)
         if (text) {
-          const { text: unwrapped, user } = unwrapChannelEnvelope(text)
+          const { text: unwrapped, user, channelTs } =
+            unwrapChannelEnvelope(text)
           events.push({
             v: 1,
             ts,
             type: `user_message`,
             text: unwrapped,
             ...(user && { user }),
+            ...(channelTs !== undefined && { channelTs }),
           })
         }
       } else if (typeof content === `string` && content) {
-        const { text: unwrapped, user } = unwrapChannelEnvelope(content)
+        const { text: unwrapped, user, channelTs } =
+          unwrapChannelEnvelope(content)
         events.push({
           v: 1,
           ts,
           type: `user_message`,
           text: unwrapped,
           ...(user && { user }),
+          ...(channelTs !== undefined && { channelTs }),
         })
       }
 
+      continue
+    }
+
+    // Queue-channel submissions that arrive while the agent is mid-turn
+    // are first recorded as queue-operation "enqueue" entries. The
+    // matching delivered event (type="attachment" / "queued_command"
+    // below) won't appear until the agent drains the queue. Emit a
+    // `user_message_queued` up front so viewers can render an in-flight
+    // "queued" bubble that transitions to the delivered `user_message`
+    // via the shared channelTs.
+    if (
+      entry.type === `queue-operation` &&
+      (entry as Record<string, unknown>).operation === `enqueue`
+    ) {
+      const content = (entry as Record<string, unknown>).content
+      if (typeof content === `string` && content.length > 0) {
+        const { text: unwrapped, user, channelTs } =
+          unwrapChannelEnvelope(content)
+        if (channelTs !== undefined) {
+          events.push({
+            v: 1,
+            ts,
+            type: `user_message_queued`,
+            text: unwrapped,
+            ...(user && { user }),
+            channelTs,
+          })
+        }
+      }
       continue
     }
 
@@ -259,7 +297,7 @@ export function normalizeClaude(
         typeof attachment.prompt === `string` &&
         attachment.prompt.length > 0
       ) {
-        const { text: unwrapped, user } = unwrapChannelEnvelope(
+        const { text: unwrapped, user, channelTs } = unwrapChannelEnvelope(
           attachment.prompt
         )
         events.push({
@@ -268,6 +306,7 @@ export function normalizeClaude(
           type: `user_message`,
           text: unwrapped,
           ...(user && { user }),
+          ...(channelTs !== undefined && { channelTs }),
         })
       }
       continue

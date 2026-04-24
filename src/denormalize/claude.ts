@@ -203,6 +203,11 @@ export function denormalizeClaude(
         break
       }
 
+      case `user_message_queued`:
+        // UI-only hint; the matching `user_message` (same channelTs)
+        // will produce the native turn during denormalization.
+        break
+
       case `thinking`: {
         if (event.text) {
           const p = ensurePending(event.ts)

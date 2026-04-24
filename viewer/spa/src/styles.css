@@ -478,6 +478,22 @@ h2 {
   background: rgba(0, 210, 160, 0.08);
   border-color: rgba(0, 210, 160, 0.3);
 }
+.message.user.pending .message-bubble {
+  opacity: 0.65;
+  border-style: dashed;
+  background: rgba(0, 210, 160, 0.04);
+}
+.message-badge {
+  display: inline-block;
+  margin-left: 0.45rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(0, 210, 160, 0.15);
+  border: 1px solid rgba(0, 210, 160, 0.3);
+  font-size: 0.6rem;
+  letter-spacing: 0.05em;
+  color: var(--c-text-2);
+}
 .message-bubble :first-child { margin-top: 0; }
 .message-bubble :last-child { margin-bottom: 0; }
 .message-bubble p { margin: 0.4rem 0; }

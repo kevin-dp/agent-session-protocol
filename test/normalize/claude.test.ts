@@ -143,6 +143,47 @@ describe(`normalize claude`, () => {
     expect(userMsgs[2]!.user).toEqual({ name: `Sam` })
   })
 
+  it(`emits user_message_queued from queue-operation enqueue records`, () => {
+    // When a viewer POSTs a prompt while Claude is mid-turn, CC records
+    // it as a queue-operation "enqueue" entry (with the channel envelope
+    // in .content) before later dequeuing and processing it as a
+    // queued_command attachment. The normalizer should emit
+    // `user_message_queued` for the enqueue so viewers can render an
+    // in-flight "queued" bubble.
+    const enqueue = JSON.stringify({
+      type: `queue-operation`,
+      operation: `enqueue`,
+      timestamp: `2026-04-24T09:31:40.552Z`,
+      content: `<channel source="queue" user="anonymous" ts="1777023099910">\nWhat's the model name\n</channel>`,
+    })
+    const delivered = JSON.stringify({
+      type: `attachment`,
+      attachment: {
+        type: `queued_command`,
+        prompt: `<channel source="queue" user="anonymous" ts="1777023099910">\nWhat's the model name\n</channel>`,
+        commandMode: `prompt`,
+      },
+      uuid: `u-delivered`,
+      timestamp: `2026-04-24T09:31:48.120Z`,
+    })
+
+    const evts = normalize([enqueue, delivered], `claude`)
+    const queued = evts.filter((e) => e.type === `user_message_queued`)
+    const delivereds = evts.filter((e) => e.type === `user_message`)
+
+    expect(queued).toHaveLength(1)
+    expect(delivereds).toHaveLength(1)
+    if (queued[0]!.type !== `user_message_queued`) return
+    if (delivereds[0]!.type !== `user_message`) return
+    // Both events share channelTs so viewers can pair them up.
+    expect(queued[0]!.channelTs).toBe(1777023099910)
+    expect(delivereds[0]!.channelTs).toBe(1777023099910)
+    // And both carry the same user attribution.
+    expect(queued[0]!.user).toEqual({ name: `anonymous` })
+    expect(delivereds[0]!.user).toEqual({ name: `anonymous` })
+    expect(queued[0]!.text).toBe(`What's the model name`)
+  })
+
   it(`unwraps channel envelope on direct user messages`, () => {
     // First prompt in a burst lands as type="user" with the channel
     // envelope directly in message.content — same unwrap applies.

@@ -76,6 +76,11 @@ export function denormalizeCodex(
         break
       }
 
+      case `user_message_queued`:
+        // UI-only hint from Claude's queue-operation; no Codex analog
+        // and the matching `user_message` carries the actual content.
+        break
+
       case `assistant_message`: {
         lines.push(
           JSON.stringify({

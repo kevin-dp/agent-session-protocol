@@ -4,6 +4,13 @@ import { highlightCodeBlocks, renderMarkdown } from "../lib/markdown"
 interface UserProps {
   text: string
   user?: { name: string; email?: string }
+  /**
+   * When true, the prompt was received by the agent but hasn't been
+   * processed yet (queue-channel submissions that land mid-turn).
+   * Rendered with a muted "queued" badge so the submitter and other
+   * viewers see immediate feedback instead of wondering if it was lost.
+   */
+  pending?: boolean
 }
 
 interface AssistantProps {
@@ -11,10 +18,15 @@ interface AssistantProps {
   phase?: `commentary` | `final`
 }
 
-export function UserMessage({ text, user }: UserProps): JSX.Element {
+export function UserMessage({ text, user, pending }: UserProps): JSX.Element {
   return (
-    <div className="message user">
-      {user?.name && <div className="message-author">{user.name}</div>}
+    <div className={`message user${pending ? ` pending` : ``}`}>
+      {user?.name && (
+        <div className="message-author">
+          {user.name}
+          {pending && <span className="message-badge">queued</span>}
+        </div>
+      )}
       <div className="message-bubble">{text}</div>
     </div>
   )

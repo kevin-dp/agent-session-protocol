@@ -27,6 +27,38 @@ export interface UserMessageEvent {
     name: string
     email?: string
   }
+  /**
+   * When present, the prompt originally arrived via a queue-channel
+   * envelope (`<channel source="queue" user="…" ts="<unix-ms>">`). The
+   * `ts` attribute from that envelope — used by viewers to correlate a
+   * `user_message_queued` event with its delivered counterpart so an
+   * in-flight "queued" bubble can transition to "delivered".
+   */
+  channelTs?: number
+}
+
+/**
+ * A user prompt was received by the agent but couldn't be handled
+ * immediately (the agent was mid-turn). Emitted when the native stream
+ * records `type:"queue-operation" operation:"enqueue"`. A matching
+ * `user_message` with the same `channelTs` will follow once the agent
+ * dequeues and processes it — viewers should render the queued bubble
+ * and replace (or upgrade) it when the delivered event arrives.
+ *
+ * If the agent was idle when the prompt arrived there's no enqueue
+ * record, so this event never fires — only the direct `user_message`.
+ */
+export interface UserMessageQueuedEvent {
+  v: 1
+  ts: number
+  type: `user_message_queued`
+  text: string
+  user?: {
+    name: string
+    email?: string
+  }
+  /** Channel-envelope ts attribute; pairs this event with its delivered `user_message`. */
+  channelTs: number
 }
 
 export interface AssistantMessageEvent {
@@ -138,6 +170,7 @@ export interface SessionEndEvent {
 export type NormalizedEvent =
   | SessionInitEvent
   | UserMessageEvent
+  | UserMessageQueuedEvent
   | AssistantMessageEvent
   | ThinkingEvent
   | ToolCallEvent

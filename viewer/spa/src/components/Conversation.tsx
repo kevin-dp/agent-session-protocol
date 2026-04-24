@@ -42,6 +42,18 @@ export function Conversation({ events, embedded }: Props): JSX.Element {
     }
   }
 
+  // Prompts that arrive while the agent is mid-turn are first recorded
+  // as `user_message_queued`; a delivered `user_message` with the same
+  // `channelTs` follows once the agent picks them up. Render each queued
+  // prompt up front as a "pending" bubble, and drop it once its delivered
+  // twin has been seen — so viewers never see two bubbles for one submit.
+  const deliveredChannelTs = new Set<number>()
+  for (const event of events) {
+    if (event.type === `user_message` && event.channelTs !== undefined) {
+      deliveredChannelTs.add(event.channelTs)
+    }
+  }
+
   const renderedCallIds = new Set<string>()
   const items: Array<JSX.Element> = []
 
@@ -58,6 +70,18 @@ export function Conversation({ events, embedded }: Props): JSX.Element {
         break
       case `user_message`:
         items.push(<UserMessage key={key} text={event.text} user={event.user} />)
+        break
+      case `user_message_queued`:
+        // Suppress once the delivered twin has arrived.
+        if (deliveredChannelTs.has(event.channelTs)) break
+        items.push(
+          <UserMessage
+            key={key}
+            text={event.text}
+            user={event.user}
+            pending
+          />
+        )
         break
       case `assistant_message`:
         items.push(
