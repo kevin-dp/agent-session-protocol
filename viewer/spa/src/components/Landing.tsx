@@ -80,30 +80,36 @@ export function Landing({
         <dd>{entry.sessionId}</dd>
       </dl>
 
+      <details className="resume-instructions">
+        <summary>Resume this session from your terminal</summary>
+        <div className="resume-instructions-body">
+          <div className="prereq">
+            <h2>Prerequisites</h2>
+            <p className="prereq-intro">
+              To resume this session you need the <code>capi</code> CLI
+              installed and a valid auth token for the underlying Durable
+              Streams server.
+            </p>
+            <CodeBlock code={installCmd} />
+          </div>
+
+          <h2>Resume in Claude Code</h2>
+          <CodeBlock code={claudeCmd} />
+
+          <h2>Resume in Codex</h2>
+          <CodeBlock code={codexCmd} />
+
+          <p className="subtle">
+            You need a valid auth token to actually import the session.
+          </p>
+        </div>
+      </details>
+
       <EmbeddedSession
         entry={entry}
         token={activeToken}
         onSubmitToken={onWatch}
       />
-
-      <div className="prereq">
-        <h2>Prerequisites</h2>
-        <p className="prereq-intro">
-          To resume this session you need the <code>capi</code> CLI installed
-          and a valid auth token for the underlying Durable Streams server.
-        </p>
-        <CodeBlock code={installCmd} />
-      </div>
-
-      <h2>Resume in Claude Code</h2>
-      <CodeBlock code={claudeCmd} />
-
-      <h2>Resume in Codex</h2>
-      <CodeBlock code={codexCmd} />
-
-      <p className="subtle">
-        You need a valid auth token to actually import the session.
-      </p>
     </div>
   )
 }

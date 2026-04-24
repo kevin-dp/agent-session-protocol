@@ -105,34 +105,6 @@ export function PromptInput({ fullUrl, token, disabled }: Props): JSX.Element {
 
   return (
     <div className="prompt-input">
-      <div className="prompt-input-name-row">
-        <label className="prompt-input-name-label">
-          Your name (shown to the sharer):
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => persistName(e.target.value)}
-            placeholder="anonymous"
-            className="prompt-input-name"
-            maxLength={40}
-            disabled={disabled}
-          />
-        </label>
-        {submitState.kind === `sending` && (
-          <span className="prompt-input-status sending">Sending…</span>
-        )}
-        {submitState.kind === `sent` && (
-          <span className="prompt-input-status sent">Sent ✓</span>
-        )}
-        {submitState.kind === `error` && (
-          <span
-            className="prompt-input-status error"
-            title={submitState.message}
-          >
-            Failed — {submitState.message}
-          </span>
-        )}
-      </div>
       <form
         className="prompt-input-form"
         onSubmit={(e) => {
@@ -149,18 +121,48 @@ export function PromptInput({ fullUrl, token, disabled }: Props): JSX.Element {
           placeholder={
             disabled
               ? `Session ended — no active agent to receive prompts.`
-              : `Type a prompt for the live session. Enter to send; Shift+Enter for a new line.`
+              : `Ask something, or paste a message. Enter to send; Shift+Enter for a new line.`
           }
           disabled={disabled}
           aria-label="Prompt for live session"
         />
-        <button
-          type="submit"
-          className="btn primary prompt-input-submit"
-          disabled={!canSubmit}
-        >
-          Send
-        </button>
+        <div className="prompt-input-name-row">
+          <label className="prompt-input-name-label">
+            <span>name:</span>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => persistName(e.target.value)}
+              placeholder="anonymous"
+              className="prompt-input-name"
+              maxLength={40}
+              disabled={disabled}
+            />
+          </label>
+          <div className="prompt-input-submit-right">
+            {submitState.kind === `sending` && (
+              <span className="prompt-input-status sending">Sending…</span>
+            )}
+            {submitState.kind === `sent` && (
+              <span className="prompt-input-status sent">Sent ✓</span>
+            )}
+            {submitState.kind === `error` && (
+              <span
+                className="prompt-input-status error"
+                title={submitState.message}
+              >
+                Failed — {submitState.message}
+              </span>
+            )}
+            <button
+              type="submit"
+              className="btn primary prompt-input-submit"
+              disabled={!canSubmit}
+            >
+              Send
+            </button>
+          </div>
+        </div>
       </form>
     </div>
   )

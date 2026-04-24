@@ -678,85 +678,206 @@ h2 {
 }
 
 /* Prompt input — lets live viewers submit prompts back to the active session. */
+/* ─── Prompt input ──────────────────────────────────────────────── */
 .prompt-input {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
+  padding: 0.9rem 1.1rem 1rem;
   border-top: 1px solid var(--c-border);
-  background: rgba(255, 255, 255, 0.02);
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0),
+    rgba(255, 255, 255, 0.015)
+  );
 }
-.prompt-input-name-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-  font-size: 0.8rem;
-  color: var(--c-text-muted);
-}
-.prompt-input-name-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-}
-.prompt-input-name {
-  background: transparent;
-  border: 1px solid var(--c-border);
-  border-radius: 4px;
-  color: var(--c-text);
-  font-size: 0.8rem;
-  padding: 0.2rem 0.4rem;
-  max-width: 160px;
-}
-.prompt-input-name:focus {
-  outline: none;
-  border-color: var(--c-accent);
-}
-.prompt-input-status {
-  font-weight: 500;
-}
-.prompt-input-status.sending { color: var(--c-text-muted); }
-.prompt-input-status.sent { color: var(--c-ok, #4ade80); }
-.prompt-input-status.error { color: var(--c-warn, #fbbf24); }
+
+/* Single card wrapping the textarea + the bottom controls row. Focus-ring
+   glow sits on the whole card so the input feels cohesive. */
 .prompt-input-form {
   position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--c-bg-elv);
+  border: 1px solid var(--c-border);
+  border-radius: 12px;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    background 0.15s ease;
 }
+.prompt-input-form:hover {
+  border-color: rgba(84, 84, 84, 0.5);
+}
+.prompt-input-form:focus-within {
+  border-color: var(--c-brand);
+  box-shadow: 0 0 0 3px rgba(0, 210, 160, 0.15);
+  background: var(--c-bg-soft);
+}
+
 .prompt-input-textarea {
   display: block;
   width: 100%;
   resize: none;
   overflow-y: auto;
-  min-height: 4.5rem;
+  min-height: 4rem;
   max-height: 16rem;
-  /* Right padding leaves room for the absolutely-positioned send button */
-  padding: 0.75rem 4.5rem 0.75rem 0.85rem;
+  padding: 0.85rem 1rem 0.5rem;
   font-family: inherit;
   font-size: 0.95rem;
   line-height: 1.5;
-  background: var(--c-surface);
-  color: var(--c-text);
-  border: 1px solid var(--c-border);
-  border-radius: 8px;
+  background: transparent;
+  color: var(--c-text-1);
+  border: none;
+  outline: none;
   box-sizing: border-box;
 }
-.prompt-input-textarea:focus {
-  outline: none;
-  border-color: var(--c-accent);
+.prompt-input-textarea::placeholder {
+  color: var(--c-text-3);
 }
 .prompt-input-textarea:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Bottom bar inside the card: name input on the left, status + send on the right. */
+.prompt-input-name-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.5rem 0.5rem 0.5rem 1rem;
+  border-top: 1px solid var(--c-border);
+  background: transparent;
+  color: var(--c-text-3);
+  font-size: 0.78rem;
+}
+.prompt-input-form:focus-within .prompt-input-name-row {
+  border-top-color: rgba(84, 84, 84, 0.5);
+}
+.prompt-input-name-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  flex: 0 1 auto;
+  color: var(--c-text-3);
+}
+.prompt-input-name {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--c-text-1);
+  font-size: 0.78rem;
+  padding: 0.22rem 0.45rem;
+  max-width: 170px;
+  min-width: 80px;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+.prompt-input-name:hover {
+  border-color: var(--c-border);
+}
+.prompt-input-name:focus {
+  outline: none;
+  border-color: var(--c-border);
+  background: rgba(255, 255, 255, 0.03);
+}
+.prompt-input-name::placeholder {
+  color: var(--c-text-3);
+}
+
+.prompt-input-status {
+  font-weight: 500;
+  font-size: 0.75rem;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.prompt-input-status.sending {
+  color: var(--c-text-2);
+}
+.prompt-input-status.sent {
+  color: var(--c-brand);
+}
+.prompt-input-status.error {
+  color: var(--c-error);
+}
+
+/* Send button overrides: small, compact pill that sits in the bottom bar. */
 .prompt-input-submit {
-  position: absolute;
-  bottom: 0.5rem;
-  right: 0.5rem;
-  padding: 0.3rem 0.75rem;
+  padding: 0.35rem 0.9rem;
   font-size: 0.8rem;
   line-height: 1.2;
-  border-radius: 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  margin-left: auto;
 }
+
+.prompt-input-submit-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-left: auto;
+}
+
 @media (max-width: 520px) {
-  .prompt-input-name-row { flex-direction: column; align-items: flex-start; }
-  .prompt-input-textarea { padding-right: 4rem; }
+  .prompt-input-name-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+    padding: 0.6rem 0.75rem;
+  }
+  .prompt-input-submit {
+    align-self: flex-end;
+    margin-left: 0;
+  }
+  .prompt-input-name {
+    max-width: none;
+  }
+}
+
+/* ─── Collapsible resume-instructions block ─────────────────────── */
+.resume-instructions {
+  margin: 1.25rem 0 1rem;
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-bg-elv);
+}
+.resume-instructions > summary {
+  cursor: pointer;
+  padding: 0.7rem 1rem;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--c-text-2);
+  list-style: none;
+  user-select: none;
+}
+.resume-instructions > summary::-webkit-details-marker { display: none; }
+.resume-instructions > summary::before {
+  content: '▸';
+  display: inline-block;
+  margin-right: 0.5rem;
+  font-size: 0.8em;
+  transition: transform 0.15s ease;
+  transform: translateY(-1px);
+}
+.resume-instructions[open] > summary::before { transform: rotate(90deg) translateX(-1px); }
+.resume-instructions > summary:hover { color: var(--c-text-1); }
+.resume-instructions-body {
+  padding: 0 1rem 1rem;
+  border-top: 1px solid var(--c-border);
+}
+.resume-instructions-body h2 {
+  font-size: 1rem;
+  margin-top: 1rem;
+  margin-bottom: 0.4rem;
+  color: var(--c-text-1);
+}
+.resume-instructions-body .prereq {
+  margin-top: 1rem;
+}
+.resume-instructions-body .prereq-intro {
+  margin-bottom: 0.5rem;
+  color: var(--c-text-2);
+  font-size: 0.9rem;
 }
