@@ -45,8 +45,14 @@ export async function discoverClaudeSessions(): Promise<
 > {
   const home = homedir()
   const sessionsDir = join(home, `.claude`, `sessions`)
+  const projectsDir = join(home, `.claude`, `projects`)
   const sessions: Array<DiscoveredSession> = []
+  const seen = new Set<string>()
 
+  // Pass 1: lock files in `~/.claude/sessions/`. Only interactive Claude
+  // Code processes drop these (`{pid, sessionId, cwd}`); they're how we
+  // know whether a session is currently `active`. Non-interactive `-p`
+  // runs do NOT drop a lock file, so we need pass 2 below to see them.
   try {
     const files = await readdir(sessionsDir)
     for (const file of files) {
@@ -63,9 +69,7 @@ export async function discoverClaudeSessions(): Promise<
 
         const sanitized = sanitizeCwd(cwd ?? ``)
         const jsonlPath = join(
-          home,
-          `.claude`,
-          `projects`,
+          projectsDir,
           sanitized,
           `${sessionId}.jsonl`
         )
@@ -84,6 +88,7 @@ export async function discoverClaudeSessions(): Promise<
           active: pid != null && isProcessAlive(pid),
           mtime: jsonlStat.mtimeMs,
         })
+        seen.add(sessionId)
       } catch {
         continue
       }
@@ -92,6 +97,79 @@ export async function discoverClaudeSessions(): Promise<
     // sessions dir doesn't exist
   }
 
+  // Pass 2: enumerate `~/.claude/projects/<sanitized-cwd>/*.jsonl`
+  // directly. This catches sessions written by `claude -p` (no lock
+  // file), historical sessions whose lock files have since been pruned,
+  // and any other path that bypasses the interactive entrypoint. We
+  // recover the true `cwd` by reading the first event in the JSONL
+  // that carries one (Claude logs `cwd` on every user-turn event), so
+  // un-sanitizing the directory name (lossy for paths with `-`) is
+  // unnecessary.
+  try {
+    const subdirs = await readdir(projectsDir, { withFileTypes: true })
+    for (const subdir of subdirs) {
+      if (!subdir.isDirectory()) continue
+      const dirPath = join(projectsDir, subdir.name)
+      let entries
+      try {
+        entries = await readdir(dirPath)
+      } catch {
+        continue
+      }
+      for (const entry of entries) {
+        if (!entry.endsWith(`.jsonl`)) continue
+        const sessionId = entry.slice(0, -`.jsonl`.length)
+        if (seen.has(sessionId)) continue
+
+        const filePath = join(dirPath, entry)
+        let fileStat
+        try {
+          fileStat = await stat(filePath)
+        } catch {
+          continue
+        }
+
+        let cwd: string | undefined
+        try {
+          const content = await readFile(filePath, `utf8`)
+          for (const line of content.split(`\n`)) {
+            if (!line || !line.includes(`"cwd"`)) continue
+            try {
+              const parsed = JSON.parse(line) as Record<string, unknown>
+              const found = parsed.cwd
+              if (typeof found === `string` && found.length > 0) {
+                cwd = found
+                break
+              }
+            } catch {
+              // skip malformed line
+            }
+          }
+        } catch {
+          // skip unreadable file
+        }
+
+        sessions.push({
+          agent: `claude`,
+          sessionId,
+          path: filePath,
+          cwd,
+          // Without a lock file we can't know if a process is attached,
+          // so report inactive. Callers needing live attachment should
+          // cross-check against `~/.claude/sessions/`.
+          active: false,
+          mtime: fileStat.mtimeMs,
+        })
+        seen.add(sessionId)
+      }
+    }
+  } catch {
+    // projects dir doesn't exist
+  }
+
+  // Sort newest-first so `pickLatestSession` and `discoverNewestSession`
+  // get the most-recently-written session at the head of the list.
+  sessions.sort((a, b) => b.mtime - a.mtime)
   return sessions
 }
 
