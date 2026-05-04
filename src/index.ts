@@ -1,4 +1,10 @@
 export { normalize } from "./normalize.js"
+export { normalizeClaude, normalizeClaudeEvent } from "./normalize/claude.js"
+export { normalizeCodex, normalizeCodexEvent } from "./normalize/codex.js"
+export type { ClaudeEntry } from "./normalize/claude.js"
+export type { CodexEntry } from "./normalize/codex.js"
+export { normalizeToolName } from "./tools.js"
+export type { ToolMapping } from "./tools.js"
 export { denormalize } from "./denormalize.js"
 
 export {
